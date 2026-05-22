@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { createConversation, getConversation, listConversations } from '../lib/api';
+import { createConversation, getChatOptions, getConversation, listConversations, type ChatOptionsResponse } from '../lib/api';
 import ConversationSidebar from '../components/ConversationSidebar';
 import ChatInterface from '../components/ChatInterface';
 
@@ -13,10 +13,43 @@ interface ChatMessage {
   sequenceNumber: number;
 }
 
+interface BootstrapConversation {
+  id: string;
+  created: boolean;
+}
+
+let bootstrapConversationPromise: Promise<BootstrapConversation> | null = null;
+
+async function getOrCreateInitialConversation(): Promise<BootstrapConversation> {
+  const conversations = await listConversations();
+  if (conversations.length > 0) {
+    return {
+      id: conversations[0].id,
+      created: false,
+    };
+  }
+
+  if (!bootstrapConversationPromise) {
+    bootstrapConversationPromise = createConversation()
+      .then((conversation) => ({
+        id: conversation.id,
+        created: true,
+      }))
+      .finally(() => {
+        bootstrapConversationPromise = null;
+      });
+  }
+
+  return bootstrapConversationPromise;
+}
+
 export default function ChatPage() {
   const [conversationId, setConversationId] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [title, setTitle] = useState<string>('New Conversation');
+  const [chatOptions, setChatOptions] = useState<ChatOptionsResponse | null>(null);
+  const [selectedProvider, setSelectedProvider] = useState<'cerebras' | 'gemini'>('cerebras');
+  const [selectedModel, setSelectedModel] = useState<string>('gpt-oss-120b');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
@@ -39,15 +72,22 @@ export default function ChatPage() {
     setSidebarRefreshKey((current) => current + 1);
   }, [loadConversation]);
 
+  const loadOptions = useCallback(async () => {
+    const options = await getChatOptions();
+    setChatOptions(options);
+    setSelectedProvider(options.defaultProvider);
+    setSelectedModel(options.defaultModel);
+  }, []);
+
   useEffect(() => {
     async function init() {
       try {
         setIsLoading(true);
-        const conversations = await listConversations();
-        if (conversations.length > 0) {
-          await loadConversation(conversations[0].id);
-        } else {
-          await createAndLoadConversation();
+        await loadOptions();
+        const initialConversation = await getOrCreateInitialConversation();
+        await loadConversation(initialConversation.id);
+        if (initialConversation.created) {
+          setSidebarRefreshKey((current) => current + 1);
         }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to initialize');
@@ -57,7 +97,7 @@ export default function ChatPage() {
     }
 
     init();
-  }, [createAndLoadConversation, loadConversation]);
+  }, [createAndLoadConversation, loadConversation, loadOptions]);
 
   const handleSelectConversation = async (id: string) => {
     setIsLoading(true);
@@ -82,6 +122,17 @@ export default function ChatPage() {
     await loadConversation(conversationId);
     setSidebarRefreshKey((current) => current + 1);
   }, [conversationId, loadConversation]);
+
+  const providerOptions = chatOptions?.providers ?? [];
+  const modelOptions =
+    providerOptions.find((option) => option.provider === selectedProvider)?.models ?? [selectedModel];
+
+  const handleProviderChange = (provider: 'cerebras' | 'gemini') => {
+    setSelectedProvider(provider);
+    const nextModel =
+      providerOptions.find((option) => option.provider === provider)?.models[0] ?? '';
+    setSelectedModel(nextModel);
+  };
 
   if (isLoading) {
     return (
@@ -122,12 +173,42 @@ export default function ChatPage() {
       <div className="flex-1 flex flex-col min-w-0">
         {/* Header */}
         <header className="bg-white border-b px-4 py-3">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between gap-4">
             <div>
               <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
               <p className="text-xs text-gray-500">
-                Provider configured server-side
+                Stable request/response mode
               </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <label className="text-xs font-medium text-gray-600">
+                Provider
+              </label>
+              <select
+                value={selectedProvider}
+                onChange={(e) => handleProviderChange(e.target.value as 'cerebras' | 'gemini')}
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+              >
+                {providerOptions.map((option) => (
+                  <option key={option.provider} value={option.provider}>
+                    {option.provider}
+                  </option>
+                ))}
+              </select>
+              <label className="text-xs font-medium text-gray-600">
+                Model
+              </label>
+              <select
+                value={selectedModel}
+                onChange={(e) => setSelectedModel(e.target.value)}
+                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
+              >
+                {modelOptions.map((model) => (
+                  <option key={model} value={model}>
+                    {model}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </header>
@@ -138,6 +219,8 @@ export default function ChatPage() {
             conversationId={conversationId}
             initialMessages={messages}
             onNewMessage={handleNewMessage}
+            provider={selectedProvider}
+            model={selectedModel}
           />
         </div>
       </div>

@@ -1,7 +1,17 @@
 import { eq } from 'drizzle-orm';
 import { db } from '../db';
 import { inferenceLogs } from '../db/schema';
-import { IngestionPayload, IngestionResponse } from '@ollive/shared';
+import { IngestionPayload, IngestionResponse, type InferenceStatus } from '@ollive/shared';
+
+const TERMINAL_STATUSES = new Set<InferenceStatus>(['completed', 'failed', 'cancelled', 'timed_out']);
+
+function isTerminalStatus(status: InferenceStatus): boolean {
+  return TERMINAL_STATUSES.has(status);
+}
+
+function coalesceValue<T>(incoming: T | null | undefined, existing: T | null | undefined): T | null | undefined {
+  return (incoming ?? existing) as T;
+}
 
 export async function processIngestionPayload(payload: IngestionPayload): Promise<IngestionResponse> {
   try {
@@ -49,15 +59,46 @@ export async function processIngestionPayload(payload: IngestionPayload): Promis
     };
 
     if (existingRequest.length > 0) {
-      // Update existing row - preserve earliest started_at, update completion status
+      // Preserve the original lifecycle start row and merge in richer terminal metadata over time.
       const existing = existingRequest[0];
+      const incomingStatus = payload.status;
+      const existingStatus = existing.status as InferenceStatus;
+      const shouldIgnoreLifecycleRegression =
+        isTerminalStatus(existingStatus) && !isTerminalStatus(incomingStatus);
+
+      if (shouldIgnoreLifecycleRegression) {
+        return { accepted: true, eventId: payload.eventId };
+      }
+
       await db
         .update(inferenceLogs)
         .set({
-          ...row,
-          eventId: payload.eventId, // new event id for this update
-          startedAt: existing.startedAt, // preserve earliest started_at
-          createdAt: existing.createdAt, // preserve original creation time
+          eventId: existing.eventId,
+          requestId: existing.requestId,
+          conversationId: existing.conversationId,
+          userMessageId: existing.userMessageId,
+          assistantMessageId: coalesceValue(row.assistantMessageId, existing.assistantMessageId),
+          provider: existing.provider,
+          model: existing.model,
+          status: isTerminalStatus(existingStatus) ? existingStatus : incomingStatus,
+          startedAt: existing.startedAt,
+          completedAt: coalesceValue(row.completedAt, existing.completedAt),
+          latencyMs: coalesceValue(row.latencyMs, existing.latencyMs),
+          timeToFirstTokenMs: coalesceValue(row.timeToFirstTokenMs, existing.timeToFirstTokenMs),
+          inputTokens: coalesceValue(row.inputTokens, existing.inputTokens),
+          outputTokens: coalesceValue(row.outputTokens, existing.outputTokens),
+          totalTokens: coalesceValue(row.totalTokens, existing.totalTokens),
+          finishReason: coalesceValue(row.finishReason, existing.finishReason),
+          requestPreview: existing.requestPreview,
+          responsePreview: coalesceValue(row.responsePreview, existing.responsePreview),
+          errorCode: coalesceValue(row.errorCode, existing.errorCode),
+          errorMessage: coalesceValue(row.errorMessage, existing.errorMessage),
+          httpStatus: coalesceValue(row.httpStatus, existing.httpStatus),
+          rawMetadata: {
+            ...(existing.rawMetadata as Record<string, unknown>),
+            ...(row.rawMetadata as Record<string, unknown>),
+          },
+          createdAt: existing.createdAt,
           updatedAt: new Date(),
         })
         .where(eq(inferenceLogs.requestId, payload.requestId));
@@ -71,4 +112,14 @@ export async function processIngestionPayload(payload: IngestionPayload): Promis
     console.error('Ingestion processing error:', err);
     throw err;
   }
+}
+
+export async function linkAssistantMessageToInferenceLog(requestId: string, assistantMessageId: string) {
+  await db
+    .update(inferenceLogs)
+    .set({
+      assistantMessageId,
+      updatedAt: new Date(),
+    })
+    .where(eq(inferenceLogs.requestId, requestId));
 }

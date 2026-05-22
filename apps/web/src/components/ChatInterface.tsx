@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { cancelConversation, streamMessage } from '../lib/api';
+import { sendMessageWithOptions } from '../lib/api';
 
 interface ChatMessage {
   id: string;
@@ -15,15 +15,18 @@ export default function ChatInterface({
   conversationId,
   initialMessages,
   onNewMessage,
+  provider,
+  model,
 }: {
   conversationId: string;
   initialMessages: ChatMessage[];
   onNewMessage?: () => void;
+  provider: 'cerebras' | 'gemini';
+  model: string;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const [isCancelling, setIsCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
@@ -54,78 +57,51 @@ export default function ChatInterface({
     setInput('');
     setIsLoading(true);
     setError(null);
+    const tempAssistantMessageId = `temp-assistant-${Date.now()}`;
 
     try {
-      let assistantContent = '';
-
       const tempAssistantMessage: ChatMessage = {
-        id: `temp-assistant-${Date.now()}`,
+        id: tempAssistantMessageId,
         role: 'assistant',
-        content: '',
+        content: 'Thinking...',
         status: 'partial',
         sequenceNumber: userMessage.sequenceNumber + 1,
       };
 
       setMessages((prev) => [...prev.filter((m) => m.id !== userMessage.id), userMessage, tempAssistantMessage]);
 
-      await streamMessage(
+      const result = await sendMessageWithOptions(
         conversationId,
         userMessage.content,
-        (chunk) => {
-          assistantContent += chunk.text;
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === tempAssistantMessage.id
-                ? { ...m, content: assistantContent }
-                : m
-            )
-          );
-        },
-        (messageId) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === tempAssistantMessage.id
-                ? { ...m, id: messageId, status: 'completed' }
-                : m
-              )
-          );
-        },
-        (errorMsg) => {
-          throw new Error(errorMsg);
-        },
-        (messageId) => {
-          setMessages((prev) =>
-            prev.map((m) =>
-              m.id === tempAssistantMessage.id
-                ? { ...m, id: messageId || m.id, status: 'cancelled' }
-                : m
-            )
-          );
-        }
+        provider,
+        model
+      );
+
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempAssistantMessageId
+            ? {
+                ...m,
+                id: result.message.id,
+                content: result.message.content,
+                status: result.message.status,
+                sequenceNumber: result.message.sequenceNumber,
+              }
+            : m
+        )
       );
       await Promise.resolve(onNewMessage?.());
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to send message');
+      setMessages((prev) =>
+        prev.map((m) =>
+          m.id === tempAssistantMessageId
+            ? { ...m, content: '', status: 'failed' }
+            : m
+        )
+      );
       await Promise.resolve(onNewMessage?.());
     } finally {
-      setIsLoading(false);
-      setIsCancelling(false);
-    }
-  };
-
-  const handleCancel = async () => {
-    if (!isLoading || isCancelling) {
-      return;
-    }
-
-    try {
-      setIsCancelling(true);
-      await cancelConversation(conversationId);
-      await Promise.resolve(onNewMessage?.());
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to cancel request');
-    } finally {
-      setIsCancelling(false);
       setIsLoading(false);
     }
   };
@@ -135,6 +111,22 @@ export default function ChatInterface({
       e.preventDefault();
       handleSend();
     }
+  };
+
+  const getMessageContent = (message: ChatMessage) => {
+    if (message.content.trim()) {
+      return message.content;
+    }
+
+    if (message.role === 'assistant' && message.status === 'failed') {
+      return 'Response failed. Please try again.';
+    }
+
+    if (message.role === 'assistant' && message.status === 'cancelled') {
+      return 'Response cancelled.';
+    }
+
+    return '';
   };
 
   return (
@@ -164,13 +156,19 @@ export default function ChatInterface({
                   : 'bg-white text-gray-900 border border-gray-200'
               }`}
             >
-              <p className="whitespace-pre-wrap">{message.content}</p>
+              <p className="whitespace-pre-wrap">{getMessageContent(message)}</p>
               {message.status === 'partial' && (
                 <div className="flex items-center space-x-1 mt-1">
                   <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" />
                   <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
                   <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
                 </div>
+              )}
+              {message.role === 'assistant' && message.status === 'failed' && (
+                <p className="mt-2 text-xs text-red-600">Model request failed</p>
+              )}
+              {message.role === 'assistant' && message.status === 'cancelled' && (
+                <p className="mt-2 text-xs text-gray-500">Generation cancelled</p>
               )}
             </div>
           </div>
@@ -204,13 +202,11 @@ export default function ChatInterface({
             disabled={isLoading}
           />
           <button
-            onClick={isLoading ? handleCancel : handleSend}
-            disabled={isLoading ? isCancelling : !input.trim()}
-            className={`rounded-lg px-4 py-2 text-white disabled:opacity-50 disabled:cursor-not-allowed ${
-              isLoading ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
-            }`}
+            onClick={handleSend}
+            disabled={isLoading || !input.trim()}
+            className="rounded-lg px-4 py-2 text-white disabled:opacity-50 disabled:cursor-not-allowed bg-blue-600 hover:bg-blue-700"
           >
-            {isLoading ? (isCancelling ? 'Cancelling...' : 'Cancel') : 'Send'}
+            {isLoading ? 'Sending...' : 'Send'}
           </button>
         </div>
       </div>

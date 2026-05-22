@@ -1,5 +1,4 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import fp from 'fastify-plugin';
 import { sql } from 'drizzle-orm';
 
 const healthRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
@@ -21,4 +20,4 @@ const healthRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   });
 };
 
-export default fp(healthRoutes);
+export default healthRoutes;

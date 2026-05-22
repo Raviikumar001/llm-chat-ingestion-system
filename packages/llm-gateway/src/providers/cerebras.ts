@@ -7,6 +7,50 @@ import { v4 as uuidv4 } from 'uuid';
 
 const CEREBRAS_API_BASE = 'https://api.cerebras.ai/v1';
 
+function processCerebrasStreamBuffer(
+  rawBuffer: string,
+  onChunk: (text: string, finishReason?: string) => void,
+  onFinishReason: (finishReason: string) => void,
+  onFirstToken: () => void
+) {
+  const lines = rawBuffer.split(/\r?\n/);
+  const remainder = rawBuffer.endsWith('\n') ? '' : (lines.pop() || '');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+    const data = trimmed.slice(6);
+    if (data === '[DONE]') continue;
+
+    try {
+      const parsed = JSON.parse(data) as {
+        choices: Array<{
+          delta: { content?: string };
+          finish_reason: string | null;
+        }>;
+      };
+
+      const choice = parsed.choices?.[0];
+      const delta = choice?.delta?.content || '';
+      const chunkFinishReason = choice?.finish_reason;
+
+      if (delta) {
+        onFirstToken();
+        onChunk(delta, chunkFinishReason || undefined);
+      }
+
+      if (chunkFinishReason) {
+        onFinishReason(chunkFinishReason);
+      }
+    } catch {
+      // Skip malformed JSON in stream
+    }
+  }
+
+  return remainder;
+}
+
 export class CerebrasProvider implements LlmProvider {
   name = 'cerebras' as const;
   private apiKey: string;
@@ -263,45 +307,60 @@ export class CerebrasProvider implements LlmProvider {
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (value) {
+          buffer += decoder.decode(value, { stream: !done });
+        }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed || !trimmed.startsWith('data: ')) continue;
-
-          const data = trimmed.slice(6);
-          if (data === '[DONE]') continue;
-
-          try {
-            const parsed = JSON.parse(data) as {
-              choices: Array<{
-                delta: { content?: string };
-                finish_reason: string | null;
-              }>;
-            };
-
-            const choice = parsed.choices?.[0];
-            const delta = choice?.delta?.content || '';
-            const chunkFinishReason = choice?.finish_reason;
-
-            if (delta) {
-              if (firstTokenTime === null) {
-                firstTokenTime = Date.now() - new Date(startedAt).getTime();
-              }
-              fullText += delta;
-              yield { text: delta, finishReason: chunkFinishReason || undefined };
+        const parsedChunks: Array<{ text: string; finishReason?: string }> = [];
+        buffer = processCerebrasStreamBuffer(
+          buffer,
+          (delta, chunkFinishReason) => {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - new Date(startedAt).getTime();
             }
-
-            if (chunkFinishReason) {
-              finishReason = chunkFinishReason;
+            fullText += delta;
+            parsedChunks.push({ text: delta, finishReason: chunkFinishReason });
+          },
+          (chunkFinishReason) => {
+            finishReason = chunkFinishReason;
+          },
+          () => {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - new Date(startedAt).getTime();
             }
-          } catch {
-            // Skip malformed JSON in stream
           }
+        );
+
+        for (const chunk of parsedChunks) {
+          yield chunk;
+        }
+
+        if (done) break;
+      }
+
+      if (buffer.trim()) {
+        const parsedChunks: Array<{ text: string; finishReason?: string }> = [];
+        buffer = processCerebrasStreamBuffer(
+          buffer,
+          (delta, chunkFinishReason) => {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - new Date(startedAt).getTime();
+            }
+            fullText += delta;
+            parsedChunks.push({ text: delta, finishReason: chunkFinishReason });
+          },
+          (chunkFinishReason) => {
+            finishReason = chunkFinishReason;
+          },
+          () => {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - new Date(startedAt).getTime();
+            }
+          }
+        );
+
+        for (const chunk of parsedChunks) {
+          yield chunk;
         }
       }
 

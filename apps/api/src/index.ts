@@ -1,12 +1,13 @@
 import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
-import dotenv from 'dotenv';
 
 import { createProvider, setIngestionCallback } from '@ollive/llm-gateway';
 import type { IngestionPayload as GatewayIngestionPayload, LlmProvider } from '@ollive/llm-gateway';
 import type { SupportedProvider } from '@ollive/shared';
+import { getSafeDefaultModel } from './config/chat-options';
 import { processIngestionPayload } from './services/ingestion';
+import { loadApiEnv } from './config/load-env';
 
 import errorHandler from './plugins/error-handler';
 import requestId from './plugins/request-id';
@@ -18,7 +19,7 @@ import conversationRoutes from './routes/conversations';
 import chatRoutes from './routes/chat';
 import ingestionRoutes from './routes/ingestion';
 
-dotenv.config();
+loadApiEnv();
 
 function parseProvider(provider: string | undefined): SupportedProvider {
   if (provider === 'gemini') {
@@ -29,7 +30,7 @@ function parseProvider(provider: string | undefined): SupportedProvider {
 }
 
 const defaultProvider = parseProvider(process.env.DEFAULT_PROVIDER);
-const defaultModel = process.env.DEFAULT_MODEL || 'gpt-oss-120b';
+const defaultModel = getSafeDefaultModel(defaultProvider, process.env.DEFAULT_MODEL);
 
 function getApiKey(provider: SupportedProvider): string {
   switch (provider) {
@@ -60,6 +61,7 @@ const app = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || 'info',
   },
+  disableRequestLogging: true,
 });
 
 app.decorate('createLlmProvider', (provider: SupportedProvider): LlmProvider =>

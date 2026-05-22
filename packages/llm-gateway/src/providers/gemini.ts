@@ -7,6 +7,50 @@ import { v4 as uuidv4 } from 'uuid';
 
 const GEMINI_API_BASE = 'https://generativelanguage.googleapis.com/v1beta';
 
+function processGeminiStreamBuffer(
+  rawBuffer: string,
+  onChunk: (text: string, finishReason?: string) => void,
+  onFinishReason: (finishReason: string) => void,
+  onFirstToken: () => void
+) {
+  const lines = rawBuffer.split(/\r?\n/);
+  const remainder = rawBuffer.endsWith('\n') ? '' : (lines.pop() || '');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) continue;
+
+    try {
+      const parsed = JSON.parse(trimmed) as {
+        candidates: Array<{
+          content: {
+            parts: Array<{ text: string }>;
+          };
+          finishReason: string;
+        }>;
+      };
+
+      const candidate = parsed.candidates?.[0];
+      const parts = candidate?.content?.parts || [];
+      const chunkText = parts.map(p => p.text).join('');
+      const chunkFinishReason = candidate?.finishReason;
+
+      if (chunkText) {
+        onFirstToken();
+        onChunk(chunkText, chunkFinishReason || undefined);
+      }
+
+      if (chunkFinishReason) {
+        onFinishReason(chunkFinishReason);
+      }
+    } catch {
+      // Skip malformed JSON
+    }
+  }
+
+  return remainder;
+}
+
 function mapMessagesToGemini(messages: Array<{ role: string; content: string }>) {
   const systemMessage = messages.find(m => m.role === 'system');
   const otherMessages = messages.filter(m => m.role !== 'system');
@@ -276,45 +320,60 @@ export class GeminiProvider implements LlmProvider {
 
       while (true) {
         const { done, value } = await reader.read();
-        if (done) break;
+        if (value) {
+          buffer += decoder.decode(value, { stream: !done });
+        }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
-        for (const line of lines) {
-          const trimmed = line.trim();
-          if (!trimmed) continue;
-
-          try {
-            const parsed = JSON.parse(trimmed) as {
-              candidates: Array<{
-                content: {
-                  parts: Array<{ text: string }>;
-                };
-                finishReason: string;
-              }>;
-            };
-
-            const candidate = parsed.candidates?.[0];
-            const parts = candidate?.content?.parts || [];
-            const chunkText = parts.map(p => p.text).join('');
-            const chunkFinishReason = candidate?.finishReason;
-
-            if (chunkText) {
-              if (firstTokenTime === null) {
-                firstTokenTime = Date.now() - new Date(startedAt).getTime();
-              }
-              fullText += chunkText;
-              yield { text: chunkText, finishReason: chunkFinishReason || undefined };
+        const parsedChunks: Array<{ text: string; finishReason?: string }> = [];
+        buffer = processGeminiStreamBuffer(
+          buffer,
+          (chunkText, chunkFinishReason) => {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - new Date(startedAt).getTime();
             }
-
-            if (chunkFinishReason) {
-              finishReason = chunkFinishReason;
+            fullText += chunkText;
+            parsedChunks.push({ text: chunkText, finishReason: chunkFinishReason });
+          },
+          (chunkFinishReason) => {
+            finishReason = chunkFinishReason;
+          },
+          () => {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - new Date(startedAt).getTime();
             }
-          } catch {
-            // Skip malformed JSON
           }
+        );
+
+        for (const chunk of parsedChunks) {
+          yield chunk;
+        }
+
+        if (done) break;
+      }
+
+      if (buffer.trim()) {
+        const parsedChunks: Array<{ text: string; finishReason?: string }> = [];
+        processGeminiStreamBuffer(
+          buffer,
+          (chunkText, chunkFinishReason) => {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - new Date(startedAt).getTime();
+            }
+            fullText += chunkText;
+            parsedChunks.push({ text: chunkText, finishReason: chunkFinishReason });
+          },
+          (chunkFinishReason) => {
+            finishReason = chunkFinishReason;
+          },
+          () => {
+            if (firstTokenTime === null) {
+              firstTokenTime = Date.now() - new Date(startedAt).getTime();
+            }
+          }
+        );
+
+        for (const chunk of parsedChunks) {
+          yield chunk;
         }
       }
 

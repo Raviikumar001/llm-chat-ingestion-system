@@ -1,5 +1,65 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
+export interface ChatOptionsResponse {
+  defaultProvider: 'cerebras' | 'gemini';
+  defaultModel: string;
+  providers: Array<{
+    provider: 'cerebras' | 'gemini';
+    models: string[];
+  }>;
+  features: {
+    streamingEnabled: boolean;
+    cancellationEnabled: boolean;
+  };
+}
+
+function processSseBuffer(
+  rawBuffer: string,
+  onChunk: (chunk: { text: string; finishReason?: string }) => void,
+  onDone: (messageId: string) => void,
+  onError: (error: string) => void,
+  onCancelled: (messageId?: string) => void
+) {
+  const lines = rawBuffer.split(/\r?\n/);
+  const remainder = rawBuffer.endsWith('\n') ? '' : (lines.pop() || '');
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('data: ')) continue;
+
+    const data = trimmed.slice(6);
+    if (!data) continue;
+
+    let parsed: any;
+    try {
+      parsed = JSON.parse(data);
+    } catch {
+      continue;
+    }
+
+    if (parsed.done) {
+      onDone(parsed.messageId);
+      return { remainder: '', terminal: true as const };
+    }
+
+    if (parsed.cancelled) {
+      onCancelled(parsed.messageId);
+      return { remainder: '', terminal: true as const };
+    }
+
+    if (parsed.error) {
+      onError(parsed.error);
+      throw new Error(parsed.error);
+    }
+
+    if (parsed.text) {
+      onChunk(parsed);
+    }
+  }
+
+  return { remainder, terminal: false as const };
+}
+
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const error = (await response.json().catch(
@@ -77,6 +137,45 @@ export async function sendMessage(conversationId: string, message: string) {
   }>(response);
 }
 
+export async function getChatOptions() {
+  const response = await fetch(`${API_BASE}/api/v1/chat/options`);
+  return handleResponse<ChatOptionsResponse>(response);
+}
+
+export async function sendMessageWithOptions(
+  conversationId: string,
+  message: string,
+  provider: 'cerebras' | 'gemini',
+  model: string
+) {
+  const response = await fetch(`${API_BASE}/api/v1/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversationId, message, provider, model }),
+  });
+
+  return handleResponse<{
+    requestId: string;
+    message: {
+      id: string;
+      role: string;
+      content: string;
+      status: string;
+      sequenceNumber: number;
+    };
+    metadata: {
+      provider: string;
+      model: string;
+      finishReason?: string;
+      usage?: {
+        inputTokens?: number;
+        outputTokens?: number;
+        totalTokens?: number;
+      };
+    };
+  }>(response);
+}
+
 export async function streamMessage(
   conversationId: string,
   message: string,
@@ -108,36 +207,23 @@ export async function streamMessage(
 
   while (true) {
     const { done, value } = await reader.read();
+    if (value) {
+      buffer += decoder.decode(value, { stream: !done });
+    }
+
+    const result = processSseBuffer(buffer, onChunk, onDone, onError, onCancelled);
+    buffer = result.remainder;
+    if (result.terminal) {
+      return;
+    }
+
     if (done) break;
+  }
 
-    buffer += decoder.decode(value, { stream: true });
-    const lines = buffer.split('\n');
-    buffer = lines.pop() || '';
-
-    for (const line of lines) {
-      const trimmed = line.trim();
-      if (!trimmed.startsWith('data: ')) continue;
-
-      const data = trimmed.slice(6);
-      if (!data) continue;
-
-      try {
-        const parsed = JSON.parse(data);
-        if (parsed.done) {
-          onDone(parsed.messageId);
-          return;
-        } else if (parsed.cancelled) {
-          onCancelled(parsed.messageId);
-          return;
-        } else if (parsed.error) {
-          onError(parsed.error);
-          throw new Error(parsed.error);
-        } else if (parsed.text) {
-          onChunk(parsed);
-        }
-      } catch {
-        // Skip malformed JSON
-      }
+  if (buffer.trim()) {
+    const result = processSseBuffer(buffer, onChunk, onDone, onError, onCancelled);
+    if (result.terminal) {
+      return;
     }
   }
 }

@@ -1,5 +1,4 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import fp from 'fastify-plugin';
 import { IngestionPayloadSchema, type IngestionPayload } from '@ollive/shared';
 import { validateHook } from '../plugins/validate';
 import { processIngestionPayload } from '../services/ingestion';
@@ -33,4 +32,4 @@ const ingestionRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => 
   );
 };
 
-export default fp(ingestionRoutes);
+export default ingestionRoutes;

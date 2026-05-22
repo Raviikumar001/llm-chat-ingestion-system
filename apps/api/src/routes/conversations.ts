@@ -1,5 +1,4 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import fp from 'fastify-plugin';
 import {
   CreateConversationRequestSchema,
   ConversationIdParamsSchema,
@@ -67,4 +66,4 @@ const conversationRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
   );
 };
 
-export default fp(conversationRoutes);
+export default conversationRoutes;

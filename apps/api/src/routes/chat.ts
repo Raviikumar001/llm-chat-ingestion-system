@@ -1,11 +1,11 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
-import fp from 'fastify-plugin';
 import { v4 as uuidv4 } from 'uuid';
 import {
   SendChatRequestSchema,
   ConversationIdParamsSchema,
   type ConversationIdParams,
   type SendChatRequest,
+  isSupportedModel,
 } from '@ollive/shared';
 import { validateHook } from '../plugins/validate';
 import { getConversationById, updateConversationActivity } from '../repositories/conversations';
@@ -17,6 +17,8 @@ import {
   updateMessageContent,
 } from '../repositories/messages';
 import { buildPromptContext } from '../services/context-builder';
+import { buildChatOptions } from '../config/chat-options';
+import { linkAssistantMessageToInferenceLog } from '../services/ingestion';
 
 interface ActiveRequest {
   requestId: string;
@@ -30,6 +32,10 @@ function isCancelledError(error: unknown): boolean {
 }
 
 const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
+  fastify.get('/options', async (_request, reply) => {
+    return reply.send(buildChatOptions(fastify.defaultProvider, fastify.defaultModel));
+  });
+
   // POST /api/v1/chat - send a message and get assistant response (non-streaming)
   fastify.post(
     '/',
@@ -41,12 +47,20 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
 
       const { conversationId, message, provider: requestedProvider, model: requestedModel } = body;
       const requestId = uuidv4();
+      const provider = requestedProvider || fastify.defaultProvider;
+      const model = requestedModel || fastify.defaultModel;
 
       // Step 1: Verify conversation exists
       const conversation = await getConversationById(conversationId);
       if (!conversation) {
         const error = new Error('Conversation not found') as Error & { statusCode: number };
         error.statusCode = 404;
+        throw error;
+      }
+
+      if (!isSupportedModel(provider, model)) {
+        const error = new Error(`Model "${model}" is not supported for provider "${provider}"`) as Error & { statusCode: number };
+        error.statusCode = 400;
         throw error;
       }
 
@@ -72,8 +86,6 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         );
 
         // Step 4: Determine provider and model
-        const provider = requestedProvider || fastify.defaultProvider;
-        const model = requestedModel || fastify.defaultModel;
         const llmProvider = fastify.createLlmProvider(provider);
         const abortController = new AbortController();
 
@@ -104,6 +116,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
           'completed',
           result.providerMessageId
         );
+        await linkAssistantMessageToInferenceLog(requestId, assistantMessage.id);
 
         // Step 7: Update conversation activity
         await updateConversationActivity(conversationId, new Date());
@@ -128,6 +141,17 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
           : error instanceof Error
             ? error.message
             : 'Unknown error';
+
+        request.log[cancelled ? 'warn' : 'error'](
+          {
+            requestId,
+            conversationId,
+            provider: requestedProvider || fastify.defaultProvider,
+            model: requestedModel || fastify.defaultModel,
+            err: error,
+          },
+          cancelled ? 'Chat request cancelled' : 'Chat request failed'
+        );
 
         return reply.status(statusCode).send({
           requestId,
@@ -156,12 +180,20 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
 
       const { conversationId, message, provider: requestedProvider, model: requestedModel } = body;
       const requestId = uuidv4();
+      const provider = requestedProvider || fastify.defaultProvider;
+      const model = requestedModel || fastify.defaultModel;
 
       // Verify conversation exists
       const conversation = await getConversationById(conversationId);
       if (!conversation) {
         const error = new Error('Conversation not found') as Error & { statusCode: number };
         error.statusCode = 404;
+        throw error;
+      }
+
+      if (!isSupportedModel(provider, model)) {
+        const error = new Error(`Model "${model}" is not supported for provider "${provider}"`) as Error & { statusCode: number };
+        error.statusCode = 400;
         throw error;
       }
 
@@ -186,16 +218,23 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       );
 
       // Set up SSE response
+      reply.hijack();
       reply.raw.writeHead(200, {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
       });
+      reply.raw.flushHeaders?.();
 
       const abortController = new AbortController();
       activeRequests.set(conversationId, {
         requestId,
         controller: abortController,
+      });
+      reply.raw.on('close', () => {
+        if (!reply.raw.writableEnded && !abortController.signal.aborted) {
+          abortController.abort();
+        }
       });
       let fullText = '';
 
@@ -210,8 +249,6 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
           }))
         );
 
-        const provider = requestedProvider || fastify.defaultProvider;
-        const model = requestedModel || fastify.defaultModel;
         const llmProvider = fastify.createLlmProvider(provider);
 
         const streamRequest = {
@@ -238,6 +275,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
             await updateMessageContent(assistantMessage.id, fullText);
           }
           await updateMessageStatus(assistantMessage.id, 'cancelled');
+          await linkAssistantMessageToInferenceLog(requestId, assistantMessage.id);
           reply.raw.write(`data: ${JSON.stringify({ cancelled: true, messageId: assistantMessage.id })}\n\n`);
           reply.raw.end();
           return reply;
@@ -246,6 +284,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         // Finalize assistant message
         await updateMessageContent(assistantMessage.id, fullText);
         await updateMessageStatus(assistantMessage.id, 'completed');
+        await linkAssistantMessageToInferenceLog(requestId, assistantMessage.id);
         await updateConversationActivity(conversationId, new Date());
 
         reply.raw.write(`data: ${JSON.stringify({ done: true, messageId: assistantMessage.id }) }\n\n`);
@@ -253,10 +292,22 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       } catch (error) {
         const cancelled = abortController.signal.aborted || isCancelledError(error);
 
+        request.log[cancelled ? 'warn' : 'error'](
+          {
+            requestId,
+            conversationId,
+            provider: requestedProvider || fastify.defaultProvider,
+            model: requestedModel || fastify.defaultModel,
+            err: error,
+          },
+          cancelled ? 'Chat stream cancelled' : 'Chat stream failed'
+        );
+
         if (fullText) {
           await updateMessageContent(assistantMessage.id, fullText);
         }
         await updateMessageStatus(assistantMessage.id, cancelled ? 'cancelled' : 'failed');
+        await linkAssistantMessageToInferenceLog(requestId, assistantMessage.id);
 
         if (cancelled) {
           reply.raw.write(`data: ${JSON.stringify({ cancelled: true, messageId: assistantMessage.id })}\n\n`);
@@ -306,4 +357,4 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   );
 };
 
-export default fp(chatRoutes);
+export default chatRoutes;
