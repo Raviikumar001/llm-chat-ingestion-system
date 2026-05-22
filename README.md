@@ -1,193 +1,222 @@
 # Ollive
 
-A lightweight but production-minded inference logging and ingestion system for an LLM chatbot.
+Lightweight inference logging and ingestion system for an LLM chatbot. The project is built as a small monorepo with a web chat app, an API layer, an internal LLM gateway, and PostgreSQL-backed storage for conversations, messages, and inference logs.
 
-## Problem Statement
+## What It Includes
 
-Build a chatbot application that:
-1. Provides a multi-turn conversational UI
-2. Wraps LLM calls to capture inference metadata (latency, tokens, errors, etc.)
-3. Receives, validates, parses, and stores logs through an ingestion pipeline
-4. Persists conversations, messages, and inference logs in PostgreSQL
+- Multi-turn chatbot UI with conversation list and resume support
+- Provider/model switching in the UI
+- Internal LLM gateway that captures provider, model, latency, token usage, timestamps, previews, status, and errors
+- Ingestion pipeline that validates and persists normalized inference events
+- PostgreSQL schema for conversations, chat messages, and inference logs
 
-## Architecture Overview
+## Architecture
 
-```
-User Browser → Web UI (Next.js) → API (Fastify) → LLM Gateway → Provider API
-                                              ↓
-                                        Ingestion Pipeline → PostgreSQL
+```text
+Browser
+  -> Next.js web app
+  -> Fastify API
+      -> LLM gateway
+          -> Cerebras or Gemini
+      -> ingestion service
+          -> PostgreSQL
 ```
 
 ### Components
 
-- **Web UI** (`apps/web`): Next.js chat application with streaming, conversation sidebar, and error states
-- **API** (`apps/api`): Fastify backend with health checks, conversation CRUD, chat endpoints, and ingestion
-- **LLM Gateway** (`packages/llm-gateway`): Thin wrapper around Cerebras and Gemini that normalizes responses and captures metadata
-- **Shared Types** (`packages/shared`): Zod schemas and TypeScript types used across the monorepo
-- **PostgreSQL**: Stores conversations, messages, and inference logs
+- `apps/web`
+  Chat UI, conversation sidebar, provider/model selector, request states, and resume flow.
+- `apps/api`
+  Fastify server for conversations, chat, health checks, and ingestion.
+- `packages/llm-gateway`
+  Thin provider adapters plus normalized inference instrumentation.
+- `packages/shared`
+  Shared Zod schemas, types, and provider/model catalog.
+- `PostgreSQL`
+  Durable storage for conversations, messages, and inference logs.
 
-## Stack
+## Tech Stack
 
 | Layer | Technology |
-|-------|-----------|
+|-------|------------|
 | Language | TypeScript |
 | Monorepo | pnpm workspaces |
-| Frontend | Next.js 14, Tailwind CSS |
+| Frontend | Next.js 14, React 18, Tailwind CSS |
 | Backend | Fastify 4 |
 | Database | PostgreSQL 16 |
 | ORM | Drizzle ORM |
 | Validation | Zod |
 | Testing | Vitest |
-| Containerization | Docker Compose |
+| Containers | Docker Compose |
 
-## Local Setup
+## Supported Providers
 
-### Prerequisites
+### Cerebras
 
-- Node.js 20+
-- pnpm 9+
-- PostgreSQL (or Docker)
+- `gpt-oss-120b`
+- `llama3.1-8b`
+- `qwen-3-235b-a22b-instruct-2507`
+- `zai-glm-4.7`
 
-### Environment Variables
+### Gemini
+
+- `gemini-3.1-flash-lite`
+- `gemini-3-flash-preview`
+
+The server default comes from `DEFAULT_PROVIDER` and `DEFAULT_MODEL`, and the UI can override them per request.
+
+## Environment Setup
+
+Create either `.env.local` or `.env` in the repo root. `.env.local` is recommended for local development.
 
 ```bash
-# Copy the example file
-cp .env.example .env
-
-# Edit .env and add your API keys
-# CEREBRAS_API_KEY=your_key_here
-# GEMINI_API_KEY=your_key_here (optional)
+cp .env.example .env.local
 ```
 
-### Running Locally
+Required values:
 
 ```bash
-# Install dependencies
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ollive
+
+CEREBRAS_API_KEY=your_cerebras_key
+GEMINI_API_KEY=your_gemini_key
+
+DEFAULT_PROVIDER=cerebras
+DEFAULT_MODEL=gpt-oss-120b
+```
+
+## Run Locally
+
+```bash
 pnpm install
 
-# Start PostgreSQL (if not running)
 docker run -d --name ollive-postgres \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
   -e POSTGRES_DB=ollive \
   -p 5432:5432 postgres:16-alpine
 
-# Run database migrations
 pnpm db:migrate
-
-# Start both web and API
 pnpm dev
 ```
 
-### Docker Compose (One Command)
+Open:
+
+- Web: `http://localhost:3000`
+- API health: `http://localhost:3001/health`
+
+## One-Command Docker Compose
+
+The compose stack reads repo-root `.env.local` or `.env` if present.
 
 ```bash
-# Start the full stack
 cd infrastructure/docker
-docker-compose up
-
-# The app will be available at:
-# - Web UI: http://localhost:3000
-# - API: http://localhost:3001
+docker compose up --build
 ```
 
-## API Endpoints
+Open:
 
-| Endpoint | Method | Description |
-|----------|--------|-------------|
-| `/health` | GET | Health check |
-| `/ready` | GET | Readiness check (includes DB) |
-| `/api/v1/conversations` | POST | Create conversation |
+- Web: `http://localhost:3000`
+- API: `http://localhost:3001`
+
+## Main API Endpoints
+
+| Endpoint | Method | Purpose |
+|----------|--------|---------|
+| `/health` | GET | Liveness check |
+| `/ready` | GET | Readiness check with DB probe |
+| `/api/v1/conversations` | POST | Create a conversation |
 | `/api/v1/conversations` | GET | List conversations |
-| `/api/v1/conversations/:id` | GET | Get conversation with messages |
-| `/api/v1/chat` | POST | Send message (non-streaming) |
-| `/api/v1/chat/stream` | POST | Send message (SSE streaming) |
-| `/api/v1/chat/:id/cancel` | POST | Cancel active inference |
-| `/api/v1/ingestion/inference-logs` | POST | Submit inference log |
+| `/api/v1/conversations/:id` | GET | Fetch a conversation and its messages |
+| `/api/v1/chat/options` | GET | Available providers, models, and defaults |
+| `/api/v1/chat` | POST | Send a chat message using stable request/response flow |
+| `/api/v1/chat/stream` | POST | Experimental SSE streaming endpoint |
+| `/api/v1/chat/:id/cancel` | POST | Cancel active streaming inference |
+| `/api/v1/ingestion/inference-logs` | POST | Ingest normalized inference events |
 
 ## Schema Design Decisions
 
-### Conversations
+### `conversations`
+
 - One row per chat thread
-- Tracks status (active, completed, errored, cancelled)
-- Indexed on `updated_at` and `status` for fast listing
+- Stores status, timestamps, and last-message activity markers
+- Indexed for recent-first listing and status filtering
 
-### Messages
-- One row per message
-- Includes `content_preview` for UI display without loading full content
-- Enforced valid role values (system, user, assistant)
-- Unique constraint on `(conversation_id, sequence_number)` to prevent race conditions
+### `messages`
 
-### Inference Logs
-- One row per LLM invocation
-- Comprehensive metadata: timing, tokens, finish reason, previews, errors
-- `raw_metadata` as JSONB for provider-specific fields
-- Check constraints prevent negative token counts and latency values
-- Deduplication via `event_id` and lifecycle updates via `request_id`
+- One row per user or assistant message
+- Stores full content plus `content_preview` for list views
+- Uses `(conversation_id, sequence_number)` uniqueness to keep order stable
+- Constrained roles: `system`, `user`, `assistant`
 
-## How Logging and Ingestion Work
+### `inference_logs`
 
-1. The LLM Gateway wraps every provider call
-2. It emits lifecycle events: `started` → `completed`/`failed`/`cancelled`
-3. The ingestion service normalizes payloads and persists them to PostgreSQL
-4. Duplicate `event_id`s are rejected idempotently
-5. Lifecycle events update existing rows by `request_id`
-6. Chat flow continues even if ingestion fails (graceful degradation)
+- One row per logical LLM request lifecycle
+- Stores provider, model, status, timing, token counts, finish reason, request/response previews, and provider-specific metadata
+- Uses `request_id` to merge lifecycle updates across `started` and terminal events
+- Uses `event_id` dedupe for direct duplicate submissions
+- Links to both the user message and assistant message where available
 
-## Failure Handling
+## Logging And Ingestion Flow
 
-- **Provider timeout**: Returns clean error to UI, stores `timed_out` status
-- **Rate limit**: Returns `rate_limit` error with retry guidance
-- **DB unavailable during chat**: Fails before provider call (no wasted tokens)
-- **Ingestion failure**: Chat response still returned, error logged server-side
-- **Invalid payload**: Returns 400/422 with specific error codes
+1. The API persists the user message.
+2. The chat route builds a short context window from recent messages.
+3. The LLM gateway calls the selected provider and emits normalized inference lifecycle events.
+4. The ingestion service validates the payload and stores or updates the corresponding `inference_logs` row.
+5. The API persists the assistant message and links it back to the inference log row.
 
-## Provider Support
+## Failure Handling Assumptions
 
-### Primary: Cerebras
-- Model: `gpt-oss-120b`
-- Full streaming support
-- Native token usage metadata
+- Provider auth, rate-limit, timeout, and network failures are normalized and surfaced cleanly to the UI.
+- Ingestion failures should not crash the chat request path.
+- Lifecycle updates are merged by `request_id`, and terminal rows are protected from stale `started` retries regressing the stored state.
+- Database availability is required for normal chat because messages are persisted as part of the main request flow.
 
-### Secondary: Gemini
-- Model: `gemini-2.5-flash`
-- Fallback: `gemini-2.5-flash-lite`
-- Switch via `DEFAULT_PROVIDER` env var
+## Scaling Considerations
+
+- The current ingestion path is in-process for simplicity.
+- A production version would move ingestion to an async queue or event bus.
+- Conversation reads can be optimized further with denormalized metadata or query-side joins instead of per-conversation lookups.
+- Multi-node deployments would benefit from centralized cancellation/state coordination instead of in-memory request tracking.
 
 ## Tradeoffs
 
-1. **In-process ingestion**: No message broker for simplicity. In a production system, this would be an async queue.
-2. **Short context window**: Last 8 messages max (~7K chars). Sufficient for the assignment; summarization could be added later.
-3. **No PII redaction**: Mentioned as explicitly out of scope.
-4. **Config-based provider switching**: No UI toggle to keep the interface simple.
-5. **No authentication**: Single-user demo app.
+1. The primary UI path uses non-streaming chat because it is the most reliable path for the take-home core requirements.
+2. Streaming is still present as a bonus endpoint, but it is not the main UX path.
+3. Ingestion is synchronous and in-process rather than queue-backed.
+4. There is no authentication because this is a single-user demo submission.
+5. PII redaction and dashboards are intentionally left for later phases or bonus scope.
 
-## Improvements with More Time
+## What I Would Improve With More Time
 
-1. Add conversation summarization for long threads
-2. Implement async ingestion with a message queue (Redis/RabbitMQ)
-3. Add basic metrics dashboard
-4. Implement PII redaction
-5. Add conversation search
-6. Multi-user authentication
-7. Function calling / tool use
-8. Response caching
+1. Add a proper metrics dashboard for latency, throughput, and error rates.
+2. Move ingestion to a durable async pipeline.
+3. Add stronger integration tests around the DB-backed chat and ingestion paths.
+4. Harden streaming and make it a first-class UI mode again.
+5. Add conversation search, auth, and multi-user support.
+6. Add PII redaction before log persistence.
 
 ## Testing
 
 ```bash
-# Run all tests
+pnpm lint
 pnpm test
-
-# Run API tests specifically
-pnpm --filter api test
+pnpm build
 ```
 
-## Demo
+Useful focused commands:
 
-To demonstrate the system:
-1. Start the app with `docker-compose up`
-2. Open http://localhost:3000
-3. Create a conversation and send messages
-4. Check stored logs via the database or API
-5. Try switching providers via the `DEFAULT_PROVIDER` env var
+```bash
+pnpm --filter @ollive/api test
+pnpm --filter @ollive/api lint
+pnpm --filter @ollive/web lint
+```
+
+## Demo Checklist
+
+1. Start the app.
+2. Create a new conversation.
+3. Send multiple turns in the same thread.
+4. Switch between `cerebras` and `gemini` in the header.
+5. Resume an older conversation from the sidebar.
+6. Inspect stored inference logs in PostgreSQL to confirm metadata persistence.
