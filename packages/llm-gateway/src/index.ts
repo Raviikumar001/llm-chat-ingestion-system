@@ -1,3 +1,19 @@
-// Lightweight LLM gateway wrapper around provider calls
-// Will be populated in Chunk 5: Cerebras Gateway
-export {};
+import { CerebrasProvider } from './providers/cerebras';
+import { LlmProvider, IngestionCallback } from './types';
+import { ingestionClient } from './instrumentation/ingestion-client';
+
+export function createProvider(providerName: string, apiKey: string): LlmProvider {
+  switch (providerName) {
+    case 'cerebras':
+      return new CerebrasProvider(apiKey);
+    default:
+      throw new Error(`Unsupported provider: ${providerName}`);
+  }
+}
+
+export function setIngestionCallback(callback: IngestionCallback) {
+  ingestionClient.setCallback(callback);
+}
+
+export * from './types';
+export { CerebrasProvider } from './providers/cerebras';
