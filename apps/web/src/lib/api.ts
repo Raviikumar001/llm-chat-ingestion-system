@@ -1,13 +1,5 @@
 const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
-interface ApiError {
-  error: {
-    code: string;
-    message: string;
-    requestId: string;
-  };
-}
-
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
     const error = await response.json().catch(() => ({ error: { code: 'unknown', message: 'Unknown error', requestId: '' } }));
@@ -81,4 +73,68 @@ export async function sendMessage(conversationId: string, message: string) {
       };
     };
   }>(response);
+}
+
+export async function streamMessage(
+  conversationId: string,
+  message: string,
+  onChunk: (chunk: { text: string; finishReason?: string }) => void,
+  onDone: (messageId: string) => void,
+  onError: (error: string) => void
+) {
+  const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ conversationId, message }),
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+    throw new Error(error.error?.message || `HTTP ${response.status}`);
+  }
+
+  const reader = response.body?.getReader();
+  if (!reader) {
+    throw new Error('No response body');
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = '';
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split('\n');
+    buffer = lines.pop() || '';
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith('data: ')) continue;
+
+      const data = trimmed.slice(6);
+      if (!data) continue;
+
+      try {
+        const parsed = JSON.parse(data);
+        if (parsed.done) {
+          onDone(parsed.messageId);
+        } else if (parsed.error) {
+          onError(parsed.error);
+        } else if (parsed.text) {
+          onChunk(parsed);
+        }
+      } catch {
+        // Skip malformed JSON
+      }
+    }
+  }
+}
+
+export async function cancelConversation(conversationId: string) {
+  const response = await fetch(`${API_BASE}/api/v1/chat/${conversationId}/cancel`, {
+    method: 'POST',
+  });
+  return handleResponse<{ status: string; conversationId: string }>(response);
 }

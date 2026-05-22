@@ -1,4 +1,4 @@
-import { LlmProvider, ProviderGenerateRequest, ProviderGenerateResult, IngestionPayload } from '../types';
+import { LlmProvider, ProviderGenerateRequest, ProviderGenerateResult, ProviderStreamChunk, IngestionPayload } from '../types';
 import { startTimer, getTimestamp } from '../instrumentation/timing';
 import { buildRequestPreview, buildResponsePreview } from '../instrumentation/preview';
 import { normalizeError } from '../instrumentation/errors';
@@ -173,6 +173,178 @@ export class CerebrasProvider implements LlmProvider {
       await ingestionClient.emit(failedPayload);
 
       throw new Error(`Cerebras request failed: ${normalizedError.message}`);
+    }
+  }
+
+  async* stream(request: ProviderGenerateRequest): AsyncIterable<ProviderStreamChunk> {
+    const requestId = uuidv4();
+    const stopTimer = startTimer();
+    const requestPreview = buildRequestPreview(request.messages);
+    let firstTokenTime: number | null = null;
+    let fullText = '';
+    let finishReason: string | undefined;
+
+    // Emit started event
+    const startedAt = getTimestamp();
+    const startedPayload: IngestionPayload = {
+      eventId: uuidv4(),
+      requestId,
+      conversationId: request.conversationId,
+      userMessageId: request.userMessageId,
+      provider: 'cerebras',
+      model: request.model,
+      status: 'started',
+      startedAt,
+      requestPreview,
+    };
+
+    await ingestionClient.emit(startedPayload);
+
+    try {
+      const response = await fetch(`${CEREBRAS_API_BASE}/chat/completions`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${this.apiKey}`,
+        },
+        body: JSON.stringify({
+          model: request.model,
+          messages: request.messages,
+          stream: true,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorBody = await response.text();
+        const normalizedError = normalizeError(new Error(`HTTP ${response.status}: ${errorBody}`));
+        const timing = stopTimer();
+
+        const failedPayload: IngestionPayload = {
+          eventId: uuidv4(),
+          requestId,
+          conversationId: request.conversationId,
+          userMessageId: request.userMessageId,
+          provider: 'cerebras',
+          model: request.model,
+          status: 'failed',
+          startedAt,
+          completedAt: timing.completedAt.toISOString(),
+          latencyMs: timing.latencyMs,
+          requestPreview,
+          error: {
+            code: normalizedError.code,
+            message: normalizedError.message,
+          },
+          httpStatus: response.status,
+        };
+
+        await ingestionClient.emit(failedPayload);
+        throw new Error(`Cerebras API error: ${normalizedError.message} (status: ${response.status})`);
+      }
+
+      const reader = response.body?.getReader();
+      if (!reader) {
+        throw new Error('No response body available for streaming');
+      }
+
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+          const data = trimmed.slice(6);
+          if (data === '[DONE]') continue;
+
+          try {
+            const parsed = JSON.parse(data) as {
+              choices: Array<{
+                delta: { content?: string };
+                finish_reason: string | null;
+              }>;
+            };
+
+            const choice = parsed.choices?.[0];
+            const delta = choice?.delta?.content || '';
+            const chunkFinishReason = choice?.finish_reason;
+
+            if (delta) {
+              if (firstTokenTime === null) {
+                firstTokenTime = Date.now() - new Date(startedAt).getTime();
+              }
+              fullText += delta;
+              yield { text: delta, finishReason: chunkFinishReason || undefined };
+            }
+
+            if (chunkFinishReason) {
+              finishReason = chunkFinishReason;
+            }
+          } catch {
+            // Skip malformed JSON in stream
+          }
+        }
+      }
+
+      // Emit completed event
+      const timing = stopTimer();
+      const completedPayload: IngestionPayload = {
+        eventId: uuidv4(),
+        requestId,
+        conversationId: request.conversationId,
+        userMessageId: request.userMessageId,
+        provider: 'cerebras',
+        model: request.model,
+        status: 'completed',
+        startedAt,
+        completedAt: timing.completedAt.toISOString(),
+        latencyMs: timing.latencyMs,
+        timeToFirstTokenMs: firstTokenTime,
+        requestPreview,
+        responsePreview: buildResponsePreview(fullText),
+        metadata: {
+          finishReason,
+        },
+      };
+
+      await ingestionClient.emit(completedPayload);
+    } catch (error) {
+      if (error instanceof Error && error.message.startsWith('Cerebras API error')) {
+        throw error;
+      }
+
+      const normalizedError = normalizeError(error);
+      const timing = stopTimer();
+
+      const failedPayload: IngestionPayload = {
+        eventId: uuidv4(),
+        requestId,
+        conversationId: request.conversationId,
+        userMessageId: request.userMessageId,
+        provider: 'cerebras',
+        model: request.model,
+        status: normalizedError.code === 'timeout' ? 'timed_out' : 'failed',
+        startedAt,
+        completedAt: timing.completedAt.toISOString(),
+        latencyMs: timing.latencyMs,
+        timeToFirstTokenMs: firstTokenTime,
+        requestPreview,
+        error: {
+          code: normalizedError.code,
+          message: normalizedError.message,
+        },
+      };
+
+      await ingestionClient.emit(failedPayload);
+      throw new Error(`Cerebras stream failed: ${normalizedError.message}`);
     }
   }
 }

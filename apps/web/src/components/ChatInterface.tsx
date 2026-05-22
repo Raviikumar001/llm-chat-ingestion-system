@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { sendMessage } from '../lib/api';
+import { sendMessage, streamMessage } from '../lib/api';
 
 interface ChatMessage {
   id: string;
@@ -14,15 +14,18 @@ interface ChatMessage {
 export default function ChatInterface({
   conversationId,
   initialMessages,
+  onNewMessage,
 }: {
   conversationId: string;
   initialMessages: ChatMessage[];
+  onNewMessage?: () => void;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -31,6 +34,10 @@ export default function ChatInterface({
   useEffect(() => {
     scrollToBottom();
   }, [messages]);
+
+  useEffect(() => {
+    setMessages(initialMessages);
+  }, [initialMessages]);
 
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
@@ -49,22 +56,70 @@ export default function ChatInterface({
     setError(null);
 
     try {
-      const result = await sendMessage(conversationId, userMessage.content);
+      // Try streaming first
+      let assistantContent = '';
+      let assistantMessageId = '';
 
-      setMessages((prev) => [
-        ...prev.filter((m) => m.id !== userMessage.id),
-        {
-          id: result.message.id,
-          role: result.message.role,
-          content: result.message.content,
-          status: result.message.status,
-          sequenceNumber: result.message.sequenceNumber,
+      const tempAssistantMessage: ChatMessage = {
+        id: `temp-assistant-${Date.now()}`,
+        role: 'assistant',
+        content: '',
+        status: 'partial',
+        sequenceNumber: userMessage.sequenceNumber + 1,
+      };
+
+      setMessages((prev) => [...prev.filter((m) => m.id !== userMessage.id), userMessage, tempAssistantMessage]);
+
+      await streamMessage(
+        conversationId,
+        userMessage.content,
+        (chunk) => {
+          assistantContent += chunk.text;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempAssistantMessage.id
+                ? { ...m, content: assistantContent }
+                : m
+            )
+          );
         },
-      ]);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
-      // Remove the optimistically added user message on error
-      setMessages((prev) => prev.filter((m) => m.id !== userMessage.id));
+        (messageId) => {
+          assistantMessageId = messageId;
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempAssistantMessage.id
+                ? { ...m, id: messageId, status: 'completed' }
+                : m
+            )
+          );
+          onNewMessage?.();
+        },
+        (errorMsg) => {
+          setError(errorMsg);
+          setMessages((prev) =>
+            prev.filter((m) => m.id !== tempAssistantMessage.id && m.id !== userMessage.id)
+          );
+        }
+      );
+    } catch {
+      // Fallback to non-streaming
+      try {
+        const result = await sendMessage(conversationId, userMessage.content);
+        setMessages((prev) => [
+          ...prev.filter((m) => !m.id.startsWith('temp-')),
+          {
+            id: result.message.id,
+            role: result.message.role,
+            content: result.message.content,
+            status: result.message.status,
+            sequenceNumber: result.message.sequenceNumber,
+          },
+        ]);
+        onNewMessage?.();
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'Failed to send message');
+        setMessages((prev) => prev.filter((m) => !m.id.startsWith('temp-')));
+      }
     } finally {
       setIsLoading(false);
     }
@@ -99,25 +154,22 @@ export default function ChatInterface({
               className={`max-w-[80%] rounded-lg px-4 py-2 ${
                 message.role === 'user'
                   ? 'bg-blue-600 text-white'
+                  : message.status === 'partial'
+                  ? 'bg-gray-100 text-gray-900 border border-gray-300'
                   : 'bg-white text-gray-900 border border-gray-200'
               }`}
             >
               <p className="whitespace-pre-wrap">{message.content}</p>
+              {message.status === 'partial' && (
+                <div className="flex items-center space-x-1 mt-1">
+                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" />
+                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
+                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
+                </div>
+              )}
             </div>
           </div>
         ))}
-
-        {isLoading && (
-          <div className="flex justify-start">
-            <div className="bg-white border border-gray-200 rounded-lg px-4 py-2">
-              <div className="flex items-center space-x-2">
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" />
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                <div className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-              </div>
-            </div>
-          </div>
-        )}
 
         {error && (
           <div className="bg-red-50 border border-red-200 rounded-lg p-3 mx-4">
