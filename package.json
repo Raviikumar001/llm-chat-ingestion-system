@@ -1,0 +1,19 @@
+{
+  "name": "ollive",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Lightweight inference logging and ingestion system for an LLM chatbot",
+  "scripts": {
+    "dev": "pnpm --parallel dev",
+    "build": "pnpm --parallel build",
+    "lint": "pnpm --parallel lint",
+    "test": "pnpm --parallel test",
+    "db:migrate": "pnpm --filter api db:migrate",
+    "db:generate": "pnpm --filter api db:generate",
+    "db:studio": "pnpm --filter api db:studio"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.5"
+  },
+  "packageManager": "pnpm@9.1.0"
+}
