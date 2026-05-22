@@ -15,9 +15,13 @@ interface Conversation {
 export default function ConversationSidebar({
   currentConversationId,
   onSelectConversation,
+  onCreateConversation,
+  refreshKey,
 }: {
   currentConversationId: string;
   onSelectConversation: (id: string) => void;
+  onCreateConversation: () => void;
+  refreshKey: number;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
@@ -25,7 +29,7 @@ export default function ConversationSidebar({
 
   useEffect(() => {
     loadConversations();
-  }, []);
+  }, [refreshKey]);
 
   async function loadConversations() {
     try {
@@ -43,7 +47,15 @@ export default function ConversationSidebar({
   return (
     <div className="w-64 bg-white border-r h-full flex flex-col">
       <div className="p-4 border-b">
-        <h2 className="font-semibold text-gray-900">Conversations</h2>
+        <div className="flex items-center justify-between gap-2">
+          <h2 className="font-semibold text-gray-900">Conversations</h2>
+          <button
+            onClick={onCreateConversation}
+            className="rounded-md border border-gray-300 px-2 py-1 text-xs font-medium text-gray-700 hover:bg-gray-50"
+          >
+            New
+          </button>
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">

@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { sendMessage, streamMessage } from '../lib/api';
+import { cancelConversation, streamMessage } from '../lib/api';
 
 interface ChatMessage {
   id: string;
@@ -23,9 +23,9 @@ export default function ChatInterface({
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
+  const [isCancelling, setIsCancelling] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const abortControllerRef = useRef<AbortController | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -56,9 +56,7 @@ export default function ChatInterface({
     setError(null);
 
     try {
-      // Try streaming first
       let assistantContent = '';
-      let assistantMessageId = '';
 
       const tempAssistantMessage: ChatMessage = {
         id: `temp-assistant-${Date.now()}`,
@@ -84,43 +82,50 @@ export default function ChatInterface({
           );
         },
         (messageId) => {
-          assistantMessageId = messageId;
           setMessages((prev) =>
             prev.map((m) =>
               m.id === tempAssistantMessage.id
                 ? { ...m, id: messageId, status: 'completed' }
                 : m
-            )
+              )
           );
-          onNewMessage?.();
         },
         (errorMsg) => {
-          setError(errorMsg);
+          throw new Error(errorMsg);
+        },
+        (messageId) => {
           setMessages((prev) =>
-            prev.filter((m) => m.id !== tempAssistantMessage.id && m.id !== userMessage.id)
+            prev.map((m) =>
+              m.id === tempAssistantMessage.id
+                ? { ...m, id: messageId || m.id, status: 'cancelled' }
+                : m
+            )
           );
         }
       );
-    } catch {
-      // Fallback to non-streaming
-      try {
-        const result = await sendMessage(conversationId, userMessage.content);
-        setMessages((prev) => [
-          ...prev.filter((m) => !m.id.startsWith('temp-')),
-          {
-            id: result.message.id,
-            role: result.message.role,
-            content: result.message.content,
-            status: result.message.status,
-            sequenceNumber: result.message.sequenceNumber,
-          },
-        ]);
-        onNewMessage?.();
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to send message');
-        setMessages((prev) => prev.filter((m) => !m.id.startsWith('temp-')));
-      }
+      await Promise.resolve(onNewMessage?.());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to send message');
+      await Promise.resolve(onNewMessage?.());
     } finally {
+      setIsLoading(false);
+      setIsCancelling(false);
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!isLoading || isCancelling) {
+      return;
+    }
+
+    try {
+      setIsCancelling(true);
+      await cancelConversation(conversationId);
+      await Promise.resolve(onNewMessage?.());
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel request');
+    } finally {
+      setIsCancelling(false);
       setIsLoading(false);
     }
   };
@@ -199,11 +204,13 @@ export default function ChatInterface({
             disabled={isLoading}
           />
           <button
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-            className="bg-blue-600 text-white rounded-lg px-4 py-2 hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            onClick={isLoading ? handleCancel : handleSend}
+            disabled={isLoading ? isCancelling : !input.trim()}
+            className={`rounded-lg px-4 py-2 text-white disabled:opacity-50 disabled:cursor-not-allowed ${
+              isLoading ? 'bg-red-600 hover:bg-red-700' : 'bg-blue-600 hover:bg-blue-700'
+            }`}
           >
-            Send
+            {isLoading ? (isCancelling ? 'Cancelling...' : 'Cancel') : 'Send'}
           </button>
         </div>
       </div>

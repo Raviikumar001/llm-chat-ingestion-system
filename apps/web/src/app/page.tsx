@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { createConversation, getConversation } from '../lib/api';
+import { createConversation, getConversation, listConversations } from '../lib/api';
 import ConversationSidebar from '../components/ConversationSidebar';
 import ChatInterface from '../components/ChatInterface';
 
@@ -19,6 +19,7 @@ export default function ChatPage() {
   const [title, setTitle] = useState<string>('New Conversation');
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
 
   const loadConversation = useCallback(async (id: string) => {
     try {
@@ -32,12 +33,22 @@ export default function ChatPage() {
     }
   }, []);
 
+  const createAndLoadConversation = useCallback(async () => {
+    const conversation = await createConversation();
+    await loadConversation(conversation.id);
+    setSidebarRefreshKey((current) => current + 1);
+  }, [loadConversation]);
+
   useEffect(() => {
     async function init() {
       try {
         setIsLoading(true);
-        const conversation = await createConversation();
-        await loadConversation(conversation.id);
+        const conversations = await listConversations();
+        if (conversations.length > 0) {
+          await loadConversation(conversations[0].id);
+        } else {
+          await createAndLoadConversation();
+        }
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to initialize');
       } finally {
@@ -46,7 +57,7 @@ export default function ChatPage() {
     }
 
     init();
-  }, [loadConversation]);
+  }, [createAndLoadConversation, loadConversation]);
 
   const handleSelectConversation = async (id: string) => {
     setIsLoading(true);
@@ -54,10 +65,23 @@ export default function ChatPage() {
     setIsLoading(false);
   };
 
-  const handleNewMessage = () => {
-    // Refresh conversation list in sidebar
-    // The sidebar will re-fetch on its own schedule
+  const handleCreateConversation = async () => {
+    setIsLoading(true);
+    try {
+      await createAndLoadConversation();
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+  const handleNewMessage = useCallback(async () => {
+    if (!conversationId) {
+      return;
+    }
+
+    await loadConversation(conversationId);
+    setSidebarRefreshKey((current) => current + 1);
+  }, [conversationId, loadConversation]);
 
   if (isLoading) {
     return (
@@ -91,6 +115,8 @@ export default function ChatPage() {
       <ConversationSidebar
         currentConversationId={conversationId}
         onSelectConversation={handleSelectConversation}
+        onCreateConversation={handleCreateConversation}
+        refreshKey={sidebarRefreshKey}
       />
 
       <div className="flex-1 flex flex-col min-w-0">
@@ -100,7 +126,7 @@ export default function ChatPage() {
             <div>
               <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
               <p className="text-xs text-gray-500">
-                Using Cerebras • gpt-oss-120b
+                Provider configured server-side
               </p>
             </div>
           </div>

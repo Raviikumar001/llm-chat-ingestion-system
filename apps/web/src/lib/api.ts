@@ -2,10 +2,12 @@ const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:3001';
 
 async function handleResponse<T>(response: Response): Promise<T> {
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: { code: 'unknown', message: 'Unknown error', requestId: '' } }));
+    const error = (await response.json().catch(
+      () => ({ error: { code: 'unknown', message: 'Unknown error', requestId: '' } })
+    )) as { error?: { message?: string } };
     throw new Error(error.error?.message || `HTTP ${response.status}`);
   }
-  return response.json();
+  return (await response.json()) as T;
 }
 
 export async function createConversation(title?: string) {
@@ -80,7 +82,8 @@ export async function streamMessage(
   message: string,
   onChunk: (chunk: { text: string; finishReason?: string }) => void,
   onDone: (messageId: string) => void,
-  onError: (error: string) => void
+  onError: (error: string) => void,
+  onCancelled: (messageId?: string) => void
 ) {
   const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
     method: 'POST',
@@ -89,7 +92,9 @@ export async function streamMessage(
   });
 
   if (!response.ok) {
-    const error = await response.json().catch(() => ({ error: { message: 'Unknown error' } }));
+    const error = (await response.json().catch(
+      () => ({ error: { message: 'Unknown error' } })
+    )) as { error?: { message?: string } };
     throw new Error(error.error?.message || `HTTP ${response.status}`);
   }
 
@@ -120,8 +125,13 @@ export async function streamMessage(
         const parsed = JSON.parse(data);
         if (parsed.done) {
           onDone(parsed.messageId);
+          return;
+        } else if (parsed.cancelled) {
+          onCancelled(parsed.messageId);
+          return;
         } else if (parsed.error) {
           onError(parsed.error);
+          throw new Error(parsed.error);
         } else if (parsed.text) {
           onChunk(parsed);
         }
