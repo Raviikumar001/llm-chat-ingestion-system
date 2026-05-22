@@ -1,9 +1,65 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
+import { CreateConversationRequestSchema, UuidSchema } from '@ollive/shared';
+import { validateHook } from '../plugins/validate';
+import {
+  createConversation,
+  listConversations,
+  getConversationWithMessages,
+} from '../repositories/conversations';
 
 const conversationRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
-  // Placeholder for conversation routes
-  // Will be implemented in Chunk 4: Conversation APIs
+  // POST /api/v1/conversations - create a new conversation
+  fastify.post(
+    '/',
+    {
+      preHandler: validateHook({ body: CreateConversationRequestSchema }),
+    },
+    async (request, reply) => {
+      const body = request.validatedBody as { title?: string };
+      const conversation = await createConversation(body.title);
+
+      return reply.status(201).send(conversation);
+    }
+  );
+
+  // GET /api/v1/conversations - list conversations
+  fastify.get('/', async (request, reply) => {
+    const { limit, offset } = request.query as { limit?: string; offset?: string };
+    const parsedLimit = limit ? parseInt(limit, 10) : 50;
+    const parsedOffset = offset ? parseInt(offset, 10) : 0;
+
+    const conversationList = await listConversations(parsedLimit, parsedOffset);
+
+    return reply.send({
+      conversations: conversationList,
+      pagination: {
+        limit: parsedLimit,
+        offset: parsedOffset,
+        total: conversationList.length,
+      },
+    });
+  });
+
+  // GET /api/v1/conversations/:id - get conversation with messages
+  fastify.get(
+    '/:id',
+    {
+      preHandler: validateHook({ params: UuidSchema }),
+    },
+    async (request, reply) => {
+      const params = request.validatedParams as string;
+      const conversation = await getConversationWithMessages(params);
+
+      if (!conversation) {
+        const error = new Error('Conversation not found') as Error & { statusCode: number };
+        error.statusCode = 404;
+        throw error;
+      }
+
+      return reply.send(conversation);
+    }
+  );
 };
 
 export default fp(conversationRoutes, { prefix: '/api/v1/conversations' });
