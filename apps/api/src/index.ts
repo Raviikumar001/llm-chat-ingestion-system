@@ -4,11 +4,14 @@ import helmet from '@fastify/helmet';
 import dotenv from 'dotenv';
 
 import { createProvider, setIngestionCallback } from '@ollive/llm-gateway';
+import type { IngestionPayload as GatewayIngestionPayload, LlmProvider } from '@ollive/llm-gateway';
+import type { SupportedProvider } from '@ollive/shared';
 import { processIngestionPayload } from './services/ingestion';
 
 import errorHandler from './plugins/error-handler';
 import requestId from './plugins/request-id';
 import logger from './plugins/logger';
+import validate from './plugins/validate';
 
 import healthRoutes from './routes/health';
 import conversationRoutes from './routes/conversations';
@@ -17,45 +20,58 @@ import ingestionRoutes from './routes/ingestion';
 
 dotenv.config();
 
-// Initialize LLM gateway
-const defaultProvider = process.env.DEFAULT_PROVIDER || 'cerebras';
+function parseProvider(provider: string | undefined): SupportedProvider {
+  if (provider === 'gemini') {
+    return 'gemini';
+  }
+
+  return 'cerebras';
+}
+
+const defaultProvider = parseProvider(process.env.DEFAULT_PROVIDER);
 const defaultModel = process.env.DEFAULT_MODEL || 'gpt-oss-120b';
 
-function getApiKey(provider: string): string {
+function getApiKey(provider: SupportedProvider): string {
   switch (provider) {
     case 'cerebras':
-      return process.env.CEREBRAS_API_KEY || '';
+      if (!process.env.CEREBRAS_API_KEY) {
+        throw new Error('CEREBRAS_API_KEY environment variable is not set');
+      }
+      return process.env.CEREBRAS_API_KEY;
     case 'gemini':
-      return process.env.GEMINI_API_KEY || '';
+      if (!process.env.GEMINI_API_KEY) {
+        throw new Error('GEMINI_API_KEY environment variable is not set');
+      }
+      return process.env.GEMINI_API_KEY;
     default:
-      return '';
+      throw new Error(`Unsupported provider: ${provider}`);
   }
 }
 
 // Set up ingestion callback (in-process ingestion for simplicity)
-setIngestionCallback(async (payload) => {
-  await processIngestionPayload(payload);
+setIngestionCallback(async (payload: GatewayIngestionPayload) => {
+  await processIngestionPayload({
+    ...payload,
+    metadata: payload.metadata ?? {},
+  });
 });
 
 const app = Fastify({
   logger: {
     level: process.env.LOG_LEVEL || 'info',
-    transport: process.env.NODE_ENV === 'development' ? {
-      target: 'pino-pretty',
-      options: {
-        colorize: true,
-      },
-    } : undefined,
   },
 });
 
-// Make provider and model available to routes
-app.decorate('llmProvider', createProvider(defaultProvider, getApiKey(defaultProvider)));
+app.decorate('createLlmProvider', (provider: SupportedProvider): LlmProvider =>
+  createProvider(provider, getApiKey(provider))
+);
+app.decorate('defaultProvider', defaultProvider);
 app.decorate('defaultModel', defaultModel);
 
 declare module 'fastify' {
   interface FastifyInstance {
-    llmProvider: ReturnType<typeof createProvider>;
+    createLlmProvider: (provider: SupportedProvider) => LlmProvider;
+    defaultProvider: SupportedProvider;
     defaultModel: string;
   }
 }
@@ -71,13 +87,14 @@ async function start() {
   // Core plugins
   await app.register(requestId);
   await app.register(logger);
+  await app.register(validate);
   await app.register(errorHandler);
 
   // Routes
   await app.register(healthRoutes);
-  await app.register(conversationRoutes);
-  await app.register(chatRoutes);
-  await app.register(ingestionRoutes);
+  await app.register(conversationRoutes, { prefix: '/api/v1/conversations' });
+  await app.register(chatRoutes, { prefix: '/api/v1/chat' });
+  await app.register(ingestionRoutes, { prefix: '/api/v1/ingestion' });
 
   const port = parseInt(process.env.API_PORT || '3001', 10);
 

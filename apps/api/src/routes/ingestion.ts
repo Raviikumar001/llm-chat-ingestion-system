@@ -1,6 +1,6 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
-import { IngestionPayloadSchema } from '@ollive/shared';
+import { IngestionPayloadSchema, type IngestionPayload } from '@ollive/shared';
 import { validateHook } from '../plugins/validate';
 import { processIngestionPayload } from '../services/ingestion';
 
@@ -12,7 +12,7 @@ const ingestionRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => 
       preHandler: validateHook({ body: IngestionPayloadSchema }),
     },
     async (request, reply) => {
-      const body = request.validatedBody;
+      const body = request.validatedBody as IngestionPayload | undefined;
 
       if (!body) {
         const error = new Error('Invalid ingestion payload') as Error & { statusCode: number };
@@ -21,7 +21,7 @@ const ingestionRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => 
       }
 
       try {
-        const result = await processIngestionPayload(body as any);
+        const result = await processIngestionPayload(body);
         return reply.status(200).send(result);
       } catch (err) {
         request.log.error({ err }, 'Ingestion processing failed');
@@ -33,4 +33,4 @@ const ingestionRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => 
   );
 };
 
-export default fp(ingestionRoutes, { prefix: '/api/v1/ingestion' });
+export default fp(ingestionRoutes);

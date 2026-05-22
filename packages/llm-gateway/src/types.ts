@@ -1,4 +1,4 @@
-import { SupportedProvider } from '@ollive/shared';
+import type { SupportedProvider } from '@ollive/shared';
 
 export interface ChatMessage {
   role: 'system' | 'user' | 'assistant';
@@ -6,11 +6,13 @@ export interface ChatMessage {
 }
 
 export interface ProviderGenerateRequest {
+  requestId?: string;
   conversationId: string;
   userMessageId: string;
   model: string;
   messages: ChatMessage[];
   stream?: boolean;
+  signal?: AbortSignal;
 }
 
 export interface ProviderGenerateResult {
@@ -59,6 +61,7 @@ export interface IngestionPayload {
     code: string;
     message: string;
   } | null;
+  httpStatus?: number | null;
   metadata?: Record<string, unknown>;
 }
 

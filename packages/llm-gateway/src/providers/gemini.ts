@@ -31,7 +31,7 @@ export class GeminiProvider implements LlmProvider {
   }
 
   async generate(request: ProviderGenerateRequest): Promise<ProviderGenerateResult> {
-    const requestId = uuidv4();
+    const requestId = request.requestId ?? uuidv4();
     const stopTimer = startTimer();
     const requestPreview = buildRequestPreview(request.messages);
 
@@ -64,6 +64,7 @@ export class GeminiProvider implements LlmProvider {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: request.signal,
           body: JSON.stringify(body),
         }
       );
@@ -161,6 +162,12 @@ export class GeminiProvider implements LlmProvider {
 
       const normalizedError = normalizeError(error);
       const timing = stopTimer();
+      const status =
+        normalizedError.code === 'cancelled'
+          ? 'cancelled'
+          : normalizedError.code === 'timeout'
+            ? 'timed_out'
+            : 'failed';
 
       const failedPayload: IngestionPayload = {
         eventId: uuidv4(),
@@ -169,7 +176,7 @@ export class GeminiProvider implements LlmProvider {
         userMessageId: request.userMessageId,
         provider: 'gemini',
         model: request.model,
-        status: normalizedError.code === 'timeout' ? 'timed_out' : 'failed',
+        status,
         startedAt,
         completedAt: timing.completedAt.toISOString(),
         latencyMs: timing.latencyMs,
@@ -182,12 +189,16 @@ export class GeminiProvider implements LlmProvider {
       };
 
       await ingestionClient.emit(failedPayload);
-      throw new Error(`Gemini request failed: ${normalizedError.message}`);
+      throw new Error(
+        normalizedError.code === 'cancelled'
+          ? 'Gemini request cancelled'
+          : `Gemini request failed: ${normalizedError.message}`
+      );
     }
   }
 
   async* stream(request: ProviderGenerateRequest): AsyncIterable<ProviderStreamChunk> {
-    const requestId = uuidv4();
+    const requestId = request.requestId ?? uuidv4();
     const stopTimer = startTimer();
     const requestPreview = buildRequestPreview(request.messages);
     let firstTokenTime: number | null = null;
@@ -222,6 +233,7 @@ export class GeminiProvider implements LlmProvider {
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
+          signal: request.signal,
           body: JSON.stringify(body),
         }
       );
@@ -334,6 +346,12 @@ export class GeminiProvider implements LlmProvider {
 
       const normalizedError = normalizeError(error);
       const timing = stopTimer();
+      const status =
+        normalizedError.code === 'cancelled'
+          ? 'cancelled'
+          : normalizedError.code === 'timeout'
+            ? 'timed_out'
+            : 'failed';
 
       const failedPayload: IngestionPayload = {
         eventId: uuidv4(),
@@ -342,7 +360,7 @@ export class GeminiProvider implements LlmProvider {
         userMessageId: request.userMessageId,
         provider: 'gemini',
         model: request.model,
-        status: normalizedError.code === 'timeout' ? 'timed_out' : 'failed',
+        status,
         startedAt,
         completedAt: timing.completedAt.toISOString(),
         latencyMs: timing.latencyMs,
@@ -355,7 +373,11 @@ export class GeminiProvider implements LlmProvider {
       };
 
       await ingestionClient.emit(failedPayload);
-      throw new Error(`Gemini stream failed: ${normalizedError.message}`);
+      throw new Error(
+        normalizedError.code === 'cancelled'
+          ? 'Gemini stream cancelled'
+          : `Gemini stream failed: ${normalizedError.message}`
+      );
     }
   }
 }

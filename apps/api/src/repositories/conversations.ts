@@ -1,4 +1,4 @@
-import { eq, desc, sql, count } from 'drizzle-orm';
+import { eq, desc, count } from 'drizzle-orm';
 import { db } from '../db';
 import { conversations, messages } from '../db/schema';
 

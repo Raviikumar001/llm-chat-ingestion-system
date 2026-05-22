@@ -1,4 +1,4 @@
-import { ChatMessage, MessageStatus } from '@ollive/shared';
+import type { ChatMessage } from '@ollive/shared';
 
 const SYSTEM_PROMPT = 'You are a helpful assistant.';
 const MAX_CONTEXT_MESSAGES = 8;

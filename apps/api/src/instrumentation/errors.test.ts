@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeError } from '../../../packages/llm-gateway/src/instrumentation/errors';
+import { normalizeError } from '../../../../packages/llm-gateway/src/instrumentation/errors';
 
 describe('normalizeError', () => {
   it('should map timeout errors', () => {

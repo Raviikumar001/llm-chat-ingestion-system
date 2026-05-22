@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { IngestionPayloadSchema } from '@ollive/shared';
+import { IngestionPayloadSchema } from './types';
 
 describe('IngestionPayloadSchema', () => {
   it('should validate a complete payload', () => {

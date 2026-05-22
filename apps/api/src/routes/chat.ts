@@ -1,9 +1,14 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
 import { v4 as uuidv4 } from 'uuid';
-import { SendChatRequestSchema, SupportedProvider, UuidSchema } from '@ollive/shared';
+import {
+  SendChatRequestSchema,
+  ConversationIdParamsSchema,
+  type ConversationIdParams,
+  type SendChatRequest,
+} from '@ollive/shared';
 import { validateHook } from '../plugins/validate';
-import { getConversationById, updateConversationActivity, updateConversationStatus } from '../repositories/conversations';
+import { getConversationById, updateConversationActivity } from '../repositories/conversations';
 import {
   createMessage,
   getNextSequenceNumber,
@@ -13,8 +18,16 @@ import {
 } from '../repositories/messages';
 import { buildPromptContext } from '../services/context-builder';
 
-// Track active requests for cancellation
-const activeRequests = new Map<string, AbortController>();
+interface ActiveRequest {
+  requestId: string;
+  controller: AbortController;
+}
+
+const activeRequests = new Map<string, ActiveRequest>();
+
+function isCancelledError(error: unknown): boolean {
+  return error instanceof Error && error.message.toLowerCase().includes('cancel');
+}
 
 const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   // POST /api/v1/chat - send a message and get assistant response (non-streaming)
@@ -24,12 +37,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       preHandler: validateHook({ body: SendChatRequestSchema }),
     },
     async (request, reply) => {
-      const body = request.validatedBody as {
-        conversationId: string;
-        message: string;
-        provider?: SupportedProvider;
-        model?: string;
-      };
+      const body = request.validatedBody as SendChatRequest;
 
       const { conversationId, message, provider: requestedProvider, model: requestedModel } = body;
       const requestId = uuidv4();
@@ -64,18 +72,27 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         );
 
         // Step 4: Determine provider and model
-        const provider = requestedProvider || (fastify.llmProvider.name as SupportedProvider);
+        const provider = requestedProvider || fastify.defaultProvider;
         const model = requestedModel || fastify.defaultModel;
+        const llmProvider = fastify.createLlmProvider(provider);
+        const abortController = new AbortController();
+
+        activeRequests.set(conversationId, {
+          requestId,
+          controller: abortController,
+        });
 
         // Step 5: Call LLM gateway
         const generateRequest = {
+          requestId,
           conversationId,
           userMessageId: userMessage.id,
           model,
           messages: context,
+          signal: abortController.signal,
         };
 
-        const result = await fastify.llmProvider.generate(generateRequest);
+        const result = await llmProvider.generate(generateRequest);
 
         // Step 6: Persist assistant message
         const assistantSequenceNumber = await getNextSequenceNumber(conversationId);
@@ -103,14 +120,27 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
           },
         });
       } catch (error) {
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        return reply.status(500).send({
+        const cancelled = isCancelledError(error);
+        const statusCode = cancelled ? 409 : 500;
+        const errorCode = cancelled ? 'cancelled' : 'provider_error';
+        const errorMessage = cancelled
+          ? 'The request was cancelled'
+          : error instanceof Error
+            ? error.message
+            : 'Unknown error';
+
+        return reply.status(statusCode).send({
           requestId,
           error: {
-            code: 'provider_error',
+            code: errorCode,
             message: errorMessage,
           },
         });
+      } finally {
+        const activeRequest = activeRequests.get(conversationId);
+        if (activeRequest?.requestId === requestId) {
+          activeRequests.delete(conversationId);
+        }
       }
     }
   );
@@ -122,12 +152,7 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       preHandler: validateHook({ body: SendChatRequestSchema }),
     },
     async (request, reply) => {
-      const body = request.validatedBody as {
-        conversationId: string;
-        message: string;
-        provider?: SupportedProvider;
-        model?: string;
-      };
+      const body = request.validatedBody as SendChatRequest;
 
       const { conversationId, message, provider: requestedProvider, model: requestedModel } = body;
       const requestId = uuidv4();
@@ -168,7 +193,11 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
       });
 
       const abortController = new AbortController();
-      activeRequests.set(requestId, abortController);
+      activeRequests.set(conversationId, {
+        requestId,
+        controller: abortController,
+      });
+      let fullText = '';
 
       try {
         // Load context
@@ -181,26 +210,37 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
           }))
         );
 
-        const provider = requestedProvider || (fastify.llmProvider.name as SupportedProvider);
+        const provider = requestedProvider || fastify.defaultProvider;
         const model = requestedModel || fastify.defaultModel;
+        const llmProvider = fastify.createLlmProvider(provider);
 
         const streamRequest = {
+          requestId,
           conversationId,
           userMessageId: userMessage.id,
           model,
           messages: context,
+          signal: abortController.signal,
         };
 
-        let fullText = '';
-
         // Stream chunks
-        for await (const chunk of fastify.llmProvider.stream!(streamRequest)) {
+        for await (const chunk of llmProvider.stream!(streamRequest)) {
           if (abortController.signal.aborted) {
             break;
           }
 
           fullText += chunk.text;
           reply.raw.write(`data: ${JSON.stringify({ text: chunk.text, finishReason: chunk.finishReason }) }\n\n`);
+        }
+
+        if (abortController.signal.aborted) {
+          if (fullText) {
+            await updateMessageContent(assistantMessage.id, fullText);
+          }
+          await updateMessageStatus(assistantMessage.id, 'cancelled');
+          reply.raw.write(`data: ${JSON.stringify({ cancelled: true, messageId: assistantMessage.id })}\n\n`);
+          reply.raw.end();
+          return reply;
         }
 
         // Finalize assistant message
@@ -211,12 +251,25 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         reply.raw.write(`data: ${JSON.stringify({ done: true, messageId: assistantMessage.id }) }\n\n`);
         reply.raw.end();
       } catch (error) {
-        await updateMessageStatus(assistantMessage.id, 'failed');
-        const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-        reply.raw.write(`data: ${JSON.stringify({ error: errorMessage }) }\n\n`);
+        const cancelled = abortController.signal.aborted || isCancelledError(error);
+
+        if (fullText) {
+          await updateMessageContent(assistantMessage.id, fullText);
+        }
+        await updateMessageStatus(assistantMessage.id, cancelled ? 'cancelled' : 'failed');
+
+        if (cancelled) {
+          reply.raw.write(`data: ${JSON.stringify({ cancelled: true, messageId: assistantMessage.id })}\n\n`);
+        } else {
+          const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+          reply.raw.write(`data: ${JSON.stringify({ error: errorMessage }) }\n\n`);
+        }
         reply.raw.end();
       } finally {
-        activeRequests.delete(requestId);
+        const activeRequest = activeRequests.get(conversationId);
+        if (activeRequest?.requestId === requestId) {
+          activeRequests.delete(conversationId);
+        }
       }
 
       return reply;
@@ -227,25 +280,19 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   fastify.post(
     '/:id/cancel',
     {
-      preHandler: validateHook({ params: UuidSchema }),
+      preHandler: validateHook({ params: ConversationIdParamsSchema }),
     },
     async (request, reply) => {
-      const conversationId = request.validatedParams as string;
+      const { id: conversationId } = request.validatedParams as ConversationIdParams;
+      const activeRequest = activeRequests.get(conversationId);
 
-      // Find and cancel any active request for this conversation
-      let cancelled = false;
-      for (const [reqId, controller] of activeRequests.entries()) {
-        // In a real implementation, we'd key by conversation ID
-        // For now, we just cancel the most recent request
-        controller.abort();
-        activeRequests.delete(reqId);
-        cancelled = true;
-        break;
-      }
-
-      if (cancelled) {
-        await updateConversationStatus(conversationId, 'cancelled');
-        return reply.send({ status: 'cancelled', conversationId });
+      if (activeRequest) {
+        activeRequest.controller.abort();
+        return reply.send({
+          status: 'cancelled',
+          conversationId,
+          requestId: activeRequest.requestId,
+        });
       }
 
       return reply.status(404).send({
@@ -259,4 +306,4 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   );
 };
 
-export default fp(chatRoutes, { prefix: '/api/v1/chat' });
+export default fp(chatRoutes);

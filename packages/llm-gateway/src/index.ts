@@ -1,9 +1,10 @@
+import type { SupportedProvider } from '@ollive/shared';
 import { CerebrasProvider } from './providers/cerebras';
 import { GeminiProvider } from './providers/gemini';
 import { LlmProvider, IngestionCallback } from './types';
 import { ingestionClient } from './instrumentation/ingestion-client';
 
-export function createProvider(providerName: string, apiKey: string): LlmProvider {
+export function createProvider(providerName: SupportedProvider, apiKey: string): LlmProvider {
   switch (providerName) {
     case 'cerebras':
       return new CerebrasProvider(apiKey);

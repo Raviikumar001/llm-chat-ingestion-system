@@ -3,6 +3,13 @@
     "target": "ES2022",
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "baseUrl": ".",
+    "paths": {
+      "@ollive/shared": ["packages/shared/src/index.ts"],
+      "@ollive/shared/*": ["packages/shared/src/*"],
+      "@ollive/llm-gateway": ["packages/llm-gateway/src/index.ts"],
+      "@ollive/llm-gateway/*": ["packages/llm-gateway/src/*"]
+    },
     "lib": ["ES2022"],
     "strict": true,
     "esModuleInterop": true,

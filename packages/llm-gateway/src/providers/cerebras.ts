@@ -16,8 +16,7 @@ export class CerebrasProvider implements LlmProvider {
   }
 
   async generate(request: ProviderGenerateRequest): Promise<ProviderGenerateResult> {
-    const eventId = uuidv4();
-    const requestId = uuidv4();
+    const requestId = request.requestId ?? uuidv4();
     const stopTimer = startTimer();
 
     const requestPreview = buildRequestPreview(request.messages);
@@ -44,6 +43,7 @@ export class CerebrasProvider implements LlmProvider {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`,
         },
+        signal: request.signal,
         body: JSON.stringify({
           model: request.model,
           messages: request.messages,
@@ -150,6 +150,12 @@ export class CerebrasProvider implements LlmProvider {
       // Otherwise normalize and emit failure
       const normalizedError = normalizeError(error);
       const timing = stopTimer();
+      const status =
+        normalizedError.code === 'cancelled'
+          ? 'cancelled'
+          : normalizedError.code === 'timeout'
+            ? 'timed_out'
+            : 'failed';
 
       const failedPayload: IngestionPayload = {
         eventId: uuidv4(),
@@ -158,7 +164,7 @@ export class CerebrasProvider implements LlmProvider {
         userMessageId: request.userMessageId,
         provider: 'cerebras',
         model: request.model,
-        status: normalizedError.code === 'timeout' ? 'timed_out' : 'failed',
+        status,
         startedAt: startedPayload.startedAt,
         completedAt: timing.completedAt.toISOString(),
         latencyMs: timing.latencyMs,
@@ -172,12 +178,16 @@ export class CerebrasProvider implements LlmProvider {
 
       await ingestionClient.emit(failedPayload);
 
-      throw new Error(`Cerebras request failed: ${normalizedError.message}`);
+      throw new Error(
+        normalizedError.code === 'cancelled'
+          ? 'Cerebras request cancelled'
+          : `Cerebras request failed: ${normalizedError.message}`
+      );
     }
   }
 
   async* stream(request: ProviderGenerateRequest): AsyncIterable<ProviderStreamChunk> {
-    const requestId = uuidv4();
+    const requestId = request.requestId ?? uuidv4();
     const stopTimer = startTimer();
     const requestPreview = buildRequestPreview(request.messages);
     let firstTokenTime: number | null = null;
@@ -207,6 +217,7 @@ export class CerebrasProvider implements LlmProvider {
           'Content-Type': 'application/json',
           'Authorization': `Bearer ${this.apiKey}`,
         },
+        signal: request.signal,
         body: JSON.stringify({
           model: request.model,
           messages: request.messages,
@@ -323,6 +334,12 @@ export class CerebrasProvider implements LlmProvider {
 
       const normalizedError = normalizeError(error);
       const timing = stopTimer();
+      const status =
+        normalizedError.code === 'cancelled'
+          ? 'cancelled'
+          : normalizedError.code === 'timeout'
+            ? 'timed_out'
+            : 'failed';
 
       const failedPayload: IngestionPayload = {
         eventId: uuidv4(),
@@ -331,7 +348,7 @@ export class CerebrasProvider implements LlmProvider {
         userMessageId: request.userMessageId,
         provider: 'cerebras',
         model: request.model,
-        status: normalizedError.code === 'timeout' ? 'timed_out' : 'failed',
+        status,
         startedAt,
         completedAt: timing.completedAt.toISOString(),
         latencyMs: timing.latencyMs,
@@ -344,7 +361,11 @@ export class CerebrasProvider implements LlmProvider {
       };
 
       await ingestionClient.emit(failedPayload);
-      throw new Error(`Cerebras stream failed: ${normalizedError.message}`);
+      throw new Error(
+        normalizedError.code === 'cancelled'
+          ? 'Cerebras stream cancelled'
+          : `Cerebras stream failed: ${normalizedError.message}`
+      );
     }
   }
 }

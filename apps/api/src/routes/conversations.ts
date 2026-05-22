@@ -1,6 +1,11 @@
 import { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import fp from 'fastify-plugin';
-import { CreateConversationRequestSchema, UuidSchema } from '@ollive/shared';
+import {
+  CreateConversationRequestSchema,
+  ConversationIdParamsSchema,
+  type ConversationIdParams,
+  type CreateConversationRequest,
+} from '@ollive/shared';
 import { validateHook } from '../plugins/validate';
 import {
   createConversation,
@@ -16,7 +21,7 @@ const conversationRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
       preHandler: validateHook({ body: CreateConversationRequestSchema }),
     },
     async (request, reply) => {
-      const body = request.validatedBody as { title?: string };
+      const body = request.validatedBody as CreateConversationRequest;
       const conversation = await createConversation(body.title);
 
       return reply.status(201).send(conversation);
@@ -45,11 +50,11 @@ const conversationRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
   fastify.get(
     '/:id',
     {
-      preHandler: validateHook({ params: UuidSchema }),
+      preHandler: validateHook({ params: ConversationIdParamsSchema }),
     },
     async (request, reply) => {
-      const params = request.validatedParams as string;
-      const conversation = await getConversationWithMessages(params);
+      const { id } = request.validatedParams as ConversationIdParams;
+      const conversation = await getConversationWithMessages(id);
 
       if (!conversation) {
         const error = new Error('Conversation not found') as Error & { statusCode: number };
@@ -62,4 +67,4 @@ const conversationRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
   );
 };
 
-export default fp(conversationRoutes, { prefix: '/api/v1/conversations' });
+export default fp(conversationRoutes);

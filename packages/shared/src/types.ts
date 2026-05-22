@@ -18,6 +18,9 @@ export type SupportedProvider = z.infer<typeof SupportedProvider>;
 
 // UUID schema helper
 export const UuidSchema = z.string().uuid();
+export const ConversationIdParamsSchema = z.object({
+  id: UuidSchema,
+});
 
 // API Request Schemas
 export const CreateConversationRequestSchema = z.object({
@@ -62,8 +65,14 @@ export const IngestionPayloadSchema = z.object({
     code: z.string(),
     message: z.string(),
   }).optional().nullable(),
+  httpStatus: z.number().int().min(100).max(599).optional().nullable(),
   metadata: z.record(z.unknown()).optional().default({}),
 });
+
+export type CreateConversationRequest = z.infer<typeof CreateConversationRequestSchema>;
+export type SendChatRequest = z.infer<typeof SendChatRequestSchema>;
+export type ConversationIdParams = z.infer<typeof ConversationIdParamsSchema>;
+export type IngestionPayload = z.infer<typeof IngestionPayloadSchema>;
 
 // API Response Types
 export interface Conversation {
@@ -135,14 +144,3 @@ export interface IngestionResponse {
   accepted: boolean;
   eventId: string;
 }
-
-// Re-export Zod schemas for convenience
-export {
-  z,
-  UuidSchema,
-  CreateConversationRequestSchema,
-  SendChatRequestSchema,
-  StreamChatRequestSchema,
-  CancelConversationRequestSchema,
-  IngestionPayloadSchema,
-};

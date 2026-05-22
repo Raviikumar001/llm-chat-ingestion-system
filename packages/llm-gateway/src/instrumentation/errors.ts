@@ -16,6 +16,13 @@ export function normalizeError(error: unknown): NormalizedError {
   if (error instanceof Error) {
     const message = error.message.toLowerCase();
 
+    if (error.name === 'AbortError' || message.includes('aborted') || message.includes('cancel')) {
+      return {
+        code: 'cancelled',
+        message: 'The model request was cancelled',
+      };
+    }
+
     // Network errors
     if (
       message.includes('fetch failed') ||
@@ -31,11 +38,7 @@ export function normalizeError(error: unknown): NormalizedError {
     }
 
     // Timeout
-    if (
-      message.includes('timeout') ||
-      message.includes('aborted') ||
-      error.name === 'AbortError'
-    ) {
+    if (message.includes('timeout')) {
       return {
         code: 'timeout',
         message: 'The model request timed out',

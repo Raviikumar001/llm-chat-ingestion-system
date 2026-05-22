@@ -1,5 +1,9 @@
 import { describe, it, expect } from 'vitest';
-import { truncatePreview, buildRequestPreview, buildResponsePreview } from '../../../packages/llm-gateway/src/instrumentation/preview';
+import {
+  truncatePreview,
+  buildRequestPreview,
+  buildResponsePreview,
+} from '../../../../packages/llm-gateway/src/instrumentation/preview';
 
 describe('preview helpers', () => {
   describe('truncatePreview', () => {

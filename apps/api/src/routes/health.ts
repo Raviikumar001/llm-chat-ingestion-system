@@ -21,4 +21,4 @@ const healthRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
   });
 };
 
-export default fp(healthRoutes, { prefix: '' });
+export default fp(healthRoutes);
