@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect } from 'react';
 import { sendMessageWithOptions } from '../lib/api';
+import { MessageSquareIcon, PlusIcon, SendIcon, SparklesIcon } from './AppIcons';
 
 interface ChatMessage {
   id: string;
@@ -11,18 +12,97 @@ interface ChatMessage {
   sequenceNumber: number;
 }
 
+function escapeHtml(value: string) {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function renderInlineMarkdown(value: string) {
+  const escaped = escapeHtml(value);
+
+  return escaped
+    .replace(/`([^`]+)`/g, '<code class="rounded bg-white/10 px-1.5 py-0.5 text-[0.92em] text-zinc-100">$1</code>')
+    .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-white">$1</strong>')
+    .replace(/\*([^*]+)\*/g, '<em class="italic">$1</em>');
+}
+
+function renderMarkdownToHtml(value: string) {
+  const normalized = value.replace(/\r\n/g, '\n').trim();
+
+  if (!normalized) {
+    return '';
+  }
+
+  const blocks = normalized.split(/\n{2,}/);
+  const htmlBlocks = blocks.map((block) => {
+    if (block.startsWith('```') && block.endsWith('```')) {
+      const lines = block.split('\n');
+      const language = lines[0].slice(3).trim();
+      const code = escapeHtml(lines.slice(1, -1).join('\n'));
+
+      return `
+        <pre class="overflow-x-auto rounded-2xl border border-white/10 bg-black/30 px-4 py-3 text-sm leading-6 text-zinc-100"><code${language ? ` data-language="${escapeHtml(language)}"` : ''}>${code}</code></pre>
+      `;
+    }
+
+    if (/^###\s+/.test(block)) {
+      return `<h3 class="mt-1 text-lg font-semibold text-white">${renderInlineMarkdown(block.replace(/^###\s+/, ''))}</h3>`;
+    }
+
+    if (/^##\s+/.test(block)) {
+      return `<h2 class="mt-1 text-xl font-semibold text-white">${renderInlineMarkdown(block.replace(/^##\s+/, ''))}</h2>`;
+    }
+
+    if (/^#\s+/.test(block)) {
+      return `<h1 class="mt-1 text-2xl font-semibold text-white">${renderInlineMarkdown(block.replace(/^#\s+/, ''))}</h1>`;
+    }
+
+    const listLines = block.split('\n');
+    if (listLines.every((line) => /^[-*]\s+/.test(line.trim()))) {
+      return `
+        <ul class="space-y-2 pl-5 text-[15px] leading-7 text-zinc-100">
+          ${listLines
+            .map((line) => `<li class="list-disc">${renderInlineMarkdown(line.trim().replace(/^[-*]\s+/, ''))}</li>`)
+            .join('')}
+        </ul>
+      `;
+    }
+
+    if (listLines.every((line) => /^\d+\.\s+/.test(line.trim()))) {
+      return `
+        <ol class="space-y-2 pl-5 text-[15px] leading-7 text-zinc-100">
+          ${listLines
+            .map((line) => `<li class="list-decimal">${renderInlineMarkdown(line.trim().replace(/^\d+\.\s+/, ''))}</li>`)
+            .join('')}
+        </ol>
+      `;
+    }
+
+    const withLineBreaks = renderInlineMarkdown(block).replace(/\n/g, '<br />');
+    return `<p class="text-[15px] leading-7 text-zinc-100">${withLineBreaks}</p>`;
+  });
+
+  return htmlBlocks.join('');
+}
+
 export default function ChatInterface({
   conversationId,
   initialMessages,
   onNewMessage,
   provider,
   model,
+  conversationTitle,
 }: {
   conversationId: string;
   initialMessages: ChatMessage[];
   onNewMessage?: () => void;
   provider: 'cerebras' | 'gemini';
   model: string;
+  conversationTitle: string;
 }) {
   const [messages, setMessages] = useState<ChatMessage[]>(initialMessages);
   const [input, setInput] = useState('');
@@ -129,87 +209,171 @@ export default function ChatInterface({
     return '';
   };
 
-  return (
-    <div className="flex flex-col h-full">
-      {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.length === 0 && (
-          <div className="text-center text-gray-500 mt-8">
-            <p className="text-lg font-medium">Start a conversation</p>
-            <p className="text-sm mt-1">Send a message to begin chatting</p>
-          </div>
-        )}
+  const suggestionPrompts = [
+    'Summarize what this system logs for each request.',
+    'Compare Cerebras and Gemini for this chat app.',
+    'Explain the ingestion flow in simple steps.',
+  ];
 
-        {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${
-              message.role === 'user' ? 'justify-end' : 'justify-start'
-            }`}
+  const renderComposer = (mode: 'floating' | 'docked') => (
+    <div className={mode === 'floating' ? 'w-full max-w-[680px]' : 'mx-auto w-full max-w-[860px]'}>
+      <div
+        className={`rounded-[30px] border border-white/10 bg-zinc-900/90 p-2 shadow-[0_18px_80px_rgba(0,0,0,0.35)] backdrop-blur ${
+          mode === 'floating' ? 'ring-1 ring-white/5' : ''
+        }`}
+      >
+        <div className="flex items-end gap-2">
+          <button
+            type="button"
+            className="mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-zinc-400 transition hover:border-white/20 hover:text-white"
+            aria-label="Add prompt helper"
           >
-            <div
-              className={`max-w-[80%] rounded-lg px-4 py-2 ${
-                message.role === 'user'
-                  ? 'bg-blue-600 text-white'
-                  : message.status === 'partial'
-                  ? 'bg-gray-100 text-gray-900 border border-gray-300'
-                  : 'bg-white text-gray-900 border border-gray-200'
-              }`}
-            >
-              <p className="whitespace-pre-wrap">{getMessageContent(message)}</p>
-              {message.status === 'partial' && (
-                <div className="flex items-center space-x-1 mt-1">
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" />
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
-                  <div className="w-1.5 h-1.5 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }} />
-                </div>
-              )}
-              {message.role === 'assistant' && message.status === 'failed' && (
-                <p className="mt-2 text-xs text-red-600">Model request failed</p>
-              )}
-              {message.role === 'assistant' && message.status === 'cancelled' && (
-                <p className="mt-2 text-xs text-gray-500">Generation cancelled</p>
-              )}
-            </div>
+            <PlusIcon className="h-4 w-4" />
+          </button>
+
+          <div className="min-h-[48px] flex-1 py-1">
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={handleKeyDown}
+              placeholder="Ask anything about your inference pipeline..."
+              rows={1}
+              className="max-h-44 min-h-[44px] w-full resize-none bg-transparent px-2 py-2.5 text-[15px] leading-6 text-zinc-100 outline-hidden placeholder:text-zinc-500"
+              disabled={isLoading}
+            />
           </div>
-        ))}
 
-        {error && (
-          <div className="bg-red-50 border border-red-200 rounded-lg p-3 mx-4">
-            <p className="text-red-700 text-sm">{error}</p>
-            <button
-              onClick={() => setError(null)}
-              className="text-red-600 text-xs underline mt-1"
-            >
-              Dismiss
-            </button>
-          </div>
-        )}
-
-        <div ref={messagesEndRef} />
-      </div>
-
-      {/* Input */}
-      <div className="border-t bg-white p-4">
-        <div className="flex items-end space-x-2 max-w-4xl mx-auto">
-          <textarea
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Type a message..."
-            rows={1}
-            className="flex-1 resize-none rounded-lg border border-gray-300 px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
-            disabled={isLoading}
-          />
           <button
             onClick={handleSend}
             disabled={isLoading || !input.trim()}
-            className="rounded-lg px-4 py-2 text-white disabled:opacity-50 disabled:cursor-not-allowed bg-blue-600 hover:bg-blue-700"
+            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-sky-500 text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500"
+            aria-label="Send message"
           >
-            {isLoading ? 'Sending...' : 'Send'}
+            <SendIcon className="h-4 w-4" />
           </button>
         </div>
       </div>
+    </div>
+  );
+
+  const hasMessages = messages.length > 0;
+
+  return (
+    <div className="flex h-full flex-col">
+      <div className="flex-1 overflow-y-auto">
+        {!hasMessages ? (
+          <div className="flex min-h-full flex-col items-center justify-center px-6 pb-16 pt-10">
+            <div className="max-w-3xl text-center">
+              <div className="mx-auto mb-6 flex h-14 w-14 items-center justify-center rounded-[20px] border border-white/10 bg-white/[0.04] text-white">
+                <SparklesIcon className="h-6 w-6" />
+              </div>
+              <p className="text-sm font-medium text-zinc-500">{conversationTitle}</p>
+              <h2 className="mt-3 text-3xl font-semibold tracking-tight text-white md:text-5xl">
+                What are you working on?
+              </h2>
+              <p className="mx-auto mt-4 max-w-xl text-sm leading-7 text-zinc-500 md:text-base">
+                Ask about architecture, compare providers, or inspect how a single inference flows through your logging pipeline.
+              </p>
+            </div>
+
+            <div className="mt-10 flex w-full justify-center">
+              {renderComposer('floating')}
+            </div>
+
+            <div className="mt-5 grid w-full max-w-[920px] grid-cols-1 gap-3 md:grid-cols-3">
+              {suggestionPrompts.map((prompt) => (
+                <button
+                  key={prompt}
+                  type="button"
+                  onClick={() => setInput(prompt)}
+                  className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
+                >
+                  {prompt}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 px-4 py-8 sm:px-6 lg:px-8">
+            {messages.map((message) => (
+              <div
+                key={message.id}
+                className={`flex ${message.role === 'user' ? 'justify-end' : 'justify-start'}`}
+              >
+                <div className={`max-w-[90%] sm:max-w-[78%] ${
+                  message.role === 'assistant' ? 'pl-1' : ''
+                }`}
+                >
+                  {message.role === 'assistant' && (
+                    <div className="mb-3 flex items-center gap-2 text-xs font-medium uppercase tracking-[0.2em] text-zinc-500">
+                      <div className="flex h-8 w-8 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.04] text-zinc-200">
+                        <MessageSquareIcon className="h-4 w-4" />
+                      </div>
+                      Assistant
+                    </div>
+                  )}
+
+                  <div
+                    className={`rounded-[26px] border px-5 py-4 shadow-[0_12px_40px_rgba(0,0,0,0.16)] ${
+                      message.role === 'user'
+                        ? 'border-sky-400/20 bg-sky-500 text-white'
+                        : message.status === 'partial'
+                        ? 'border-white/10 bg-white/[0.05] text-zinc-200'
+                        : 'border-white/10 bg-white/[0.03] text-zinc-100'
+                    }`}
+                  >
+                    <div
+                      className="prose prose-invert max-w-none prose-p:my-0 prose-headings:mb-4 prose-headings:mt-0 prose-ol:my-0 prose-ul:my-0 prose-pre:my-0 prose-code:before:hidden prose-code:after:hidden"
+                      dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(getMessageContent(message)) }}
+                    />
+                    {message.status === 'partial' && (
+                      <div className="mt-3 flex items-center space-x-1">
+                        <div className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" />
+                        <div className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '0.1s' }} />
+                        <div className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '0.2s' }} />
+                      </div>
+                    )}
+                    {message.role === 'assistant' && message.status === 'failed' && (
+                      <p className="mt-3 text-xs text-red-300">Model request failed</p>
+                    )}
+                    {message.role === 'assistant' && message.status === 'cancelled' && (
+                      <p className="mt-3 text-xs text-zinc-500">Generation cancelled</p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            {error && (
+              <div className="rounded-[24px] border border-red-500/20 bg-red-500/10 p-4">
+                <p className="text-sm text-red-200">{error}</p>
+                <button
+                  onClick={() => setError(null)}
+                  className="mt-2 text-xs font-medium text-red-300 underline underline-offset-4"
+                >
+                  Dismiss
+                </button>
+              </div>
+            )}
+
+            <div ref={messagesEndRef} />
+          </div>
+        )}
+      </div>
+
+      {hasMessages && (
+        <div className="border-t border-white/10 bg-black/25 px-4 py-5 backdrop-blur">
+          <div className="mx-auto flex max-w-5xl flex-col gap-3">
+            <div className="flex items-center gap-2 px-1 text-xs text-zinc-500">
+              <SparklesIcon className="h-3.5 w-3.5" />
+              <span>
+                Sending with <span className="font-medium text-zinc-300">{provider}</span> / <span className="font-medium text-zinc-300">{model}</span>
+              </span>
+            </div>
+            {renderComposer('docked')}
+          </div>
+        </div>
+      )}
     </div>
   );
 }

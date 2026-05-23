@@ -12,8 +12,11 @@ export default function RootLayout({
   children: React.ReactNode;
 }) {
   return (
-    <html lang="en">
-      <body className="h-screen flex flex-col overflow-hidden">
+    <html lang="en" style={{ backgroundColor: '#08090c', colorScheme: 'dark' }}>
+      <body
+        className="h-screen flex flex-col overflow-hidden"
+        style={{ backgroundColor: '#08090c', color: '#f4f4f5' }}
+      >
         {children}
       </body>
     </html>

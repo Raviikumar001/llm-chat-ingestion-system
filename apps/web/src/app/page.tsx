@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback } from 'react';
 import { createConversation, getChatOptions, getConversation, listConversations, type ChatOptionsResponse } from '../lib/api';
 import ConversationSidebar from '../components/ConversationSidebar';
 import ChatInterface from '../components/ChatInterface';
+import { ChevronDownIcon, OlliveMark, SlidersIcon, SparklesIcon } from '../components/AppIcons';
 
 interface ChatMessage {
   id: string;
@@ -53,18 +54,28 @@ export default function ChatPage() {
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+
+  const getConversationLabel = useCallback((nextTitle: string | null, nextMessages: ChatMessage[]) => {
+    if (nextTitle?.trim()) {
+      return nextTitle;
+    }
+
+    return nextMessages.length === 0 ? 'New chat' : 'Untitled Conversation';
+  }, []);
 
   const loadConversation = useCallback(async (id: string) => {
     try {
       const conversation = await getConversation(id);
       setConversationId(conversation.id);
-      setTitle(conversation.title || 'Untitled Conversation');
-      setMessages(conversation.messages || []);
+      const nextMessages = conversation.messages || [];
+      setTitle(getConversationLabel(conversation.title, nextMessages));
+      setMessages(nextMessages);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load conversation');
     }
-  }, []);
+  }, [getConversationLabel]);
 
   const createAndLoadConversation = useCallback(async () => {
     const conversation = await createConversation();
@@ -79,25 +90,29 @@ export default function ChatPage() {
     setSelectedModel(options.defaultModel);
   }, []);
 
-  useEffect(() => {
-    async function init() {
-      try {
-        setIsLoading(true);
-        await loadOptions();
-        const initialConversation = await getOrCreateInitialConversation();
-        await loadConversation(initialConversation.id);
-        if (initialConversation.created) {
-          setSidebarRefreshKey((current) => current + 1);
-        }
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to initialize');
-      } finally {
-        setIsLoading(false);
+  const initializeWorkspace = useCallback(async () => {
+    try {
+      setIsLoading(true);
+      setError(null);
+      await loadOptions();
+      const initialConversation = await getOrCreateInitialConversation();
+      await loadConversation(initialConversation.id);
+      if (initialConversation.created) {
+        setSidebarRefreshKey((current) => current + 1);
       }
+    } catch (err) {
+      setConversationId(null);
+      setMessages([]);
+      setTitle('Ollive Chat');
+      setError(err instanceof Error ? err.message : 'Failed to initialize');
+    } finally {
+      setIsLoading(false);
     }
+  }, [loadConversation, loadOptions]);
 
-    init();
-  }, [createAndLoadConversation, loadConversation, loadOptions]);
+  useEffect(() => {
+    void initializeWorkspace();
+  }, [initializeWorkspace]);
 
   const handleSelectConversation = async (id: string) => {
     setIsLoading(true);
@@ -134,94 +149,132 @@ export default function ChatPage() {
     setSelectedModel(nextModel);
   };
 
-  if (isLoading) {
+  if (isLoading && !chatOptions && !conversationId) {
     return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500">Loading...</div>
-      </div>
-    );
-  }
-
-  if (error) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-center">
-          <p className="text-red-600 font-medium">{error}</p>
-          <p className="text-gray-500 text-sm mt-1">Please check that the API server is running</p>
+      <div className="flex h-full bg-[#08090c] text-zinc-100">
+        <div className="hidden w-[290px] shrink-0 border-r border-white/10 bg-black/55 xl:flex xl:flex-col" />
+        <div className="flex min-w-0 flex-1 flex-col">
+          <div className="border-b border-white/10 bg-black/35 px-4 py-4">
+            <div className="mx-auto h-12 w-full max-w-6xl rounded-2xl bg-white/[0.03]" />
+          </div>
+          <div className="flex flex-1 items-center justify-center px-6">
+            <div className="space-y-4 text-center">
+              <div className="mx-auto h-12 w-12 animate-pulse rounded-2xl border border-white/10 bg-white/[0.04]" />
+              <div className="h-4 w-40 animate-pulse rounded-full bg-white/[0.05]" />
+            </div>
+          </div>
         </div>
       </div>
     );
   }
 
-  if (!conversationId) {
-    return (
-      <div className="flex items-center justify-center h-full">
-        <div className="text-gray-500">No conversation available</div>
-      </div>
-    );
-  }
-
   return (
-    <div className="flex h-full">
+    <div className="flex h-full bg-[#08090c] text-zinc-100">
       <ConversationSidebar
-        currentConversationId={conversationId}
+        currentConversationId={conversationId ?? ''}
         onSelectConversation={handleSelectConversation}
         onCreateConversation={handleCreateConversation}
         refreshKey={sidebarRefreshKey}
+        isCollapsed={isSidebarCollapsed}
+        onToggleCollapsed={() => setIsSidebarCollapsed((current) => !current)}
       />
 
-      <div className="flex-1 flex flex-col min-w-0">
-        {/* Header */}
-        <header className="bg-white border-b px-4 py-3">
-          <div className="flex items-center justify-between gap-4">
-            <div>
-              <h1 className="text-lg font-semibold text-gray-900">{title}</h1>
-              <p className="text-xs text-gray-500">
-                Stable request/response mode
-              </p>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <header className="border-b border-white/10 bg-black/35 px-4 py-4 backdrop-blur">
+          <div className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              <button
+                type="button"
+                onClick={() => setIsSidebarCollapsed((current) => !current)}
+                className="flex h-11 w-11 items-center justify-center rounded-2xl border border-white/10 bg-white/[0.03] text-zinc-100 transition hover:bg-white/[0.06]"
+                aria-label={isSidebarCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+              >
+                <OlliveMark className="h-5 w-5" />
+              </button>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h1 className="text-lg font-semibold tracking-tight text-white">
+                    {conversationId ? title : 'Ollive Chat'}
+                  </h1>
+                  <ChevronDownIcon className="h-4 w-4 text-zinc-500" />
+                </div>
+                {!error && (
+                  <p className="mt-0.5 text-xs text-zinc-500">
+                    Lightweight inference logging workspace
+                  </p>
+                )}
+              </div>
             </div>
-            <div className="flex items-center gap-2">
-              <label className="text-xs font-medium text-gray-600">
-                Provider
-              </label>
-              <select
-                value={selectedProvider}
-                onChange={(e) => handleProviderChange(e.target.value as 'cerebras' | 'gemini')}
-                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-              >
-                {providerOptions.map((option) => (
-                  <option key={option.provider} value={option.provider}>
-                    {option.provider}
-                  </option>
-                ))}
-              </select>
-              <label className="text-xs font-medium text-gray-600">
-                Model
-              </label>
-              <select
-                value={selectedModel}
-                onChange={(e) => setSelectedModel(e.target.value)}
-                className="rounded-md border border-gray-300 bg-white px-3 py-2 text-sm text-gray-900"
-              >
-                {modelOptions.map((model) => (
-                  <option key={model} value={model}>
-                    {model}
-                  </option>
-                ))}
-              </select>
+
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                <SparklesIcon className="h-4 w-4 text-zinc-400" />
+                <select
+                  value={selectedProvider}
+                  onChange={(e) => handleProviderChange(e.target.value as 'cerebras' | 'gemini')}
+                  className="bg-transparent text-sm font-medium text-zinc-100 outline-hidden"
+                >
+                  {providerOptions.map((option) => (
+                    <option key={option.provider} value={option.provider} className="bg-zinc-900">
+                      {option.provider}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
+                <SlidersIcon className="h-4 w-4 text-zinc-400" />
+                <select
+                  value={selectedModel}
+                  onChange={(e) => setSelectedModel(e.target.value)}
+                  className="max-w-[190px] bg-transparent text-sm font-medium text-zinc-100 outline-hidden"
+                >
+                  {modelOptions.map((model) => (
+                    <option key={model} value={model} className="bg-zinc-900">
+                      {model}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
           </div>
         </header>
 
-        {/* Chat */}
         <div className="flex-1 overflow-hidden">
-          <ChatInterface
-            conversationId={conversationId}
-            initialMessages={messages}
-            onNewMessage={handleNewMessage}
-            provider={selectedProvider}
-            model={selectedModel}
-          />
+          {conversationId ? (
+            <ChatInterface
+              conversationId={conversationId}
+              initialMessages={messages}
+              onNewMessage={handleNewMessage}
+              provider={selectedProvider}
+              model={selectedModel}
+              conversationTitle={title}
+            />
+          ) : (
+            <div className="flex h-full items-center justify-center px-6">
+              <div className="w-full max-w-xl rounded-[32px] border border-white/10 bg-white/[0.03] p-8 text-center shadow-[0_20px_80px_rgba(0,0,0,0.28)]">
+                <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-[20px] border border-red-500/20 bg-red-500/10 text-red-200">
+                  <SparklesIcon className="h-6 w-6" />
+                </div>
+                <h2 className="mt-6 text-2xl font-semibold tracking-tight text-white">
+                  Workspace temporarily unavailable
+                </h2>
+                <p className="mt-3 text-sm leading-7 text-zinc-400">
+                  We could not load your conversations right now.
+                </p>
+                <p className="mt-2 text-sm leading-7 text-zinc-500">
+                  Start Postgres, then retry the workspace to continue chatting.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => void initializeWorkspace()}
+                  className="mt-6 rounded-2xl bg-zinc-100 px-4 py-3 text-sm font-medium text-zinc-950 transition hover:bg-white"
+                >
+                  Retry workspace
+                </button>
+              </div>
+            </div>
+          )}
         </div>
       </div>
     </div>

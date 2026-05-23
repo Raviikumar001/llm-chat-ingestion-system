@@ -1,7 +1,42 @@
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+@import "tailwindcss";
+
+html {
+  color-scheme: dark;
+}
 
 body {
-  background-color: #f9fafb;
+  margin: 0;
+  background:
+    radial-gradient(circle at top, rgba(39, 39, 42, 0.45), transparent 34%),
+    linear-gradient(180deg, #08090c 0%, #030406 100%);
+  color: #f4f4f5;
+  font-family: "Avenir Next", "Segoe UI", "Helvetica Neue", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+*::-webkit-scrollbar-thumb {
+  border-radius: 999px;
+  background: rgba(113, 113, 122, 0.45);
+  border: 2px solid transparent;
+  background-clip: padding-box;
+}
+
+textarea {
+  field-sizing: content;
+}
+
+body {
+  background-color: #08090c;
 }
