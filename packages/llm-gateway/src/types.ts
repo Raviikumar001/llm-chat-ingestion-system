@@ -64,5 +64,3 @@ export interface IngestionPayload {
   httpStatus?: number | null;
   metadata?: Record<string, unknown>;
 }
-
-export type IngestionCallback = (payload: IngestionPayload) => Promise<void> | void;

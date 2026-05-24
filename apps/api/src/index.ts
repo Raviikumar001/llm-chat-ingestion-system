@@ -2,11 +2,10 @@ import Fastify from 'fastify';
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 
-import { createProvider, setIngestionCallback } from '@ollive/llm-gateway';
-import type { IngestionPayload as GatewayIngestionPayload, LlmProvider } from '@ollive/llm-gateway';
+import { configureIngestionClient, createProvider } from '@ollive/llm-gateway';
+import type { LlmProvider } from '@ollive/llm-gateway';
 import type { SupportedProvider } from '@ollive/shared';
 import { getSafeDefaultModel } from './config/chat-options';
-import { processIngestionPayload } from './services/ingestion';
 import { loadApiEnv } from './config/load-env';
 
 import errorHandler from './plugins/error-handler';
@@ -49,12 +48,15 @@ function getApiKey(provider: SupportedProvider): string {
   }
 }
 
-// Set up ingestion callback (in-process ingestion for simplicity)
-setIngestionCallback(async (payload: GatewayIngestionPayload) => {
-  await processIngestionPayload({
-    ...payload,
-    metadata: payload.metadata ?? {},
-  });
+const ingestionEndpoint = new URL(
+  '/api/v1/ingestion/inference-logs',
+  `http://127.0.0.1:${process.env.API_PORT || '3001'}`
+).toString();
+
+configureIngestionClient({
+  endpoint: ingestionEndpoint,
+  timeoutMs: 2_500,
+  maxRetries: 1,
 });
 
 const app = Fastify({

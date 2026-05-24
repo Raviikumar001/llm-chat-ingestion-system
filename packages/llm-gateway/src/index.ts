@@ -1,7 +1,7 @@
 import type { SupportedProvider } from '@ollive/shared';
 import { CerebrasProvider } from './providers/cerebras';
 import { GeminiProvider } from './providers/gemini';
-import { LlmProvider, IngestionCallback } from './types';
+import { LlmProvider } from './types';
 import { ingestionClient } from './instrumentation/ingestion-client';
 
 export function createProvider(providerName: SupportedProvider, apiKey: string): LlmProvider {
@@ -15,8 +15,13 @@ export function createProvider(providerName: SupportedProvider, apiKey: string):
   }
 }
 
-export function setIngestionCallback(callback: IngestionCallback) {
-  ingestionClient.setCallback(callback);
+export function configureIngestionClient(config: {
+  endpoint: string;
+  headers?: Record<string, string>;
+  timeoutMs?: number;
+  maxRetries?: number;
+}) {
+  ingestionClient.configure(config);
 }
 
 export * from './types';
