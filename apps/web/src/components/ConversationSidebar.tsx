@@ -1,8 +1,10 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useEffect } from 'react';
 import { listConversations } from '../lib/api';
 import {
+  BarChartIcon,
   ChevronDownIcon,
   ClockIcon,
   MessageSquareIcon,
@@ -150,6 +152,16 @@ export default function ConversationSidebar({
             className="w-full rounded-2xl border border-white/10 bg-white/[0.03] py-3 pl-10 pr-4 text-sm text-zinc-100 outline-hidden transition placeholder:text-zinc-500 focus:border-zinc-600 focus:bg-white/[0.05]"
           />
         </label>
+
+        <Link
+          href="/observability"
+          className="flex items-center gap-3 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
+        >
+          <span className="flex h-8 w-8 items-center justify-center rounded-xl border border-white/10 bg-white/[0.03] text-zinc-300">
+            <BarChartIcon className="h-4 w-4" />
+          </span>
+          <span>Observability</span>
+        </Link>
       </div>
 
       <div className={`px-4 pb-3 ${isCollapsed ? 'hidden' : 'block'}`}>

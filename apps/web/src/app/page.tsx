@@ -1,10 +1,17 @@
 'use client';
 
+import Link from 'next/link';
 import { useState, useEffect, useCallback } from 'react';
-import { createConversation, getChatOptions, getConversation, listConversations, type ChatOptionsResponse } from '../lib/api';
+import {
+  createConversation,
+  getChatOptions,
+  getConversation,
+  listConversations,
+  type ChatOptionsResponse,
+} from '../lib/api';
 import ConversationSidebar from '../components/ConversationSidebar';
 import ChatInterface from '../components/ChatInterface';
-import { ChevronDownIcon, OlliveMark, SlidersIcon, SparklesIcon } from '../components/AppIcons';
+import { BarChartIcon, ChevronDownIcon, OlliveMark, SlidersIcon, SparklesIcon } from '../components/AppIcons';
 
 interface ChatMessage {
   id: string;
@@ -207,6 +214,14 @@ export default function ChatPage() {
             </div>
 
             <div className="flex flex-wrap items-center justify-end gap-2">
+              <Link
+                href="/observability"
+                className="inline-flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-2 text-sm font-medium text-zinc-200 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
+              >
+                <BarChartIcon className="h-4 w-4 text-zinc-400" />
+                Observability
+              </Link>
+
               <div className="flex items-center gap-2 rounded-2xl border border-white/10 bg-white/[0.03] px-3 py-2">
                 <SparklesIcon className="h-4 w-4 text-zinc-400" />
                 <select

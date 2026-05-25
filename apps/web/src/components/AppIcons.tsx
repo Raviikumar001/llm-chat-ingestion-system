@@ -112,3 +112,23 @@ export function SidebarIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function BarChartIcon(props: IconProps) {
+  return (
+    <svg {...baseProps(props)}>
+      <path d="M5 19.5h14" />
+      <path d="M8 17V10" />
+      <path d="M12 17V6.5" />
+      <path d="M16 17v-4.5" />
+    </svg>
+  );
+}
+
+export function ArrowLeftIcon(props: IconProps) {
+  return (
+    <svg {...baseProps(props)}>
+      <path d="m12 6-6 6 6 6" />
+      <path d="M6 12h12" />
+    </svg>
+  );
+}

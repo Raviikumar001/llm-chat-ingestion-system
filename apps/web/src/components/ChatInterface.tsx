@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { sendMessageWithOptions } from '../lib/api';
+import { cancelConversation, streamMessage } from '../lib/api';
 import { MessageSquareIcon, PlusIcon, SendIcon, SparklesIcon } from './AppIcons';
 
 interface ChatMessage {
@@ -28,6 +28,41 @@ function renderInlineMarkdown(value: string) {
     .replace(/`([^`]+)`/g, '<code class="rounded bg-white/10 px-1.5 py-0.5 text-[0.92em] text-zinc-100">$1</code>')
     .replace(/\*\*([^*]+)\*\*/g, '<strong class="font-semibold text-white">$1</strong>')
     .replace(/\*([^*]+)\*/g, '<em class="italic">$1</em>');
+}
+
+function isMarkdownTableSeparator(line: string) {
+  const normalized = line.trim().replace(/\|/g, '').replace(/:/g, '');
+  return normalized.length > 0 && /^-+$/.test(normalized);
+}
+
+function parseMarkdownTable(block: string) {
+  const lines = block
+    .split('\n')
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  if (lines.length < 2) {
+    return null;
+  }
+
+  if (!lines[0].includes('|') || !isMarkdownTableSeparator(lines[1])) {
+    return null;
+  }
+
+  const toCells = (line: string) =>
+    line
+      .split('|')
+      .map((cell) => cell.trim())
+      .filter((cell, index, array) => !(index === 0 && cell === '') && !(index === array.length - 1 && cell === ''));
+
+  const headers = toCells(lines[0]);
+  const rows = lines.slice(2).map(toCells).filter((cells) => cells.length > 0);
+
+  if (headers.length === 0 || rows.some((row) => row.length !== headers.length)) {
+    return null;
+  }
+
+  return { headers, rows };
 }
 
 function renderMarkdownToHtml(value: string) {
@@ -62,6 +97,37 @@ function renderMarkdownToHtml(value: string) {
     }
 
     const listLines = block.split('\n');
+    const table = parseMarkdownTable(block);
+
+    if (table) {
+      return `
+        <div class="overflow-x-auto rounded-2xl border border-white/10 bg-black/20">
+          <table class="min-w-full border-collapse text-left text-[14px] leading-6 text-zinc-100">
+            <thead class="bg-white/[0.04]">
+              <tr>
+                ${table.headers
+                  .map((header) => `<th class="border-b border-white/10 px-4 py-3 font-semibold text-white">${renderInlineMarkdown(header)}</th>`)
+                  .join('')}
+              </tr>
+            </thead>
+            <tbody>
+              ${table.rows
+                .map(
+                  (row) => `
+                    <tr class="align-top">
+                      ${row
+                        .map((cell) => `<td class="border-t border-white/10 px-4 py-3 text-zinc-300">${renderInlineMarkdown(cell)}</td>`)
+                        .join('')}
+                    </tr>
+                  `
+                )
+                .join('')}
+            </tbody>
+          </table>
+        </div>
+      `;
+    }
+
     if (listLines.every((line) => /^[-*]\s+/.test(line.trim()))) {
       return `
         <ul class="space-y-2 pl-5 text-[15px] leading-7 text-zinc-100">
@@ -109,6 +175,7 @@ export default function ChatInterface({
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  const isCancellingRef = useRef(false);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -143,46 +210,95 @@ export default function ChatInterface({
       const tempAssistantMessage: ChatMessage = {
         id: tempAssistantMessageId,
         role: 'assistant',
-        content: 'Thinking...',
+        content: '',
         status: 'partial',
         sequenceNumber: userMessage.sequenceNumber + 1,
       };
 
+      isCancellingRef.current = false;
       setMessages((prev) => [...prev.filter((m) => m.id !== userMessage.id), userMessage, tempAssistantMessage]);
 
-      const result = await sendMessageWithOptions(
+      await streamMessage(
         conversationId,
         userMessage.content,
         provider,
         model
+        ,
+        (chunk) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempAssistantMessageId
+                ? {
+                    ...m,
+                    content: `${m.content}${chunk.text}`,
+                    status: 'partial',
+                  }
+                : m
+            )
+          );
+        },
+        async (messageId) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempAssistantMessageId
+                ? {
+                    ...m,
+                    id: messageId,
+                    status: 'completed',
+                  }
+                : m
+            )
+          );
+          await Promise.resolve(onNewMessage?.());
+        },
+        async (streamError) => {
+          setError(streamError);
+        },
+        async (messageId) => {
+          setMessages((prev) =>
+            prev.map((m) =>
+              m.id === tempAssistantMessageId
+                ? {
+                    ...m,
+                    id: messageId ?? m.id,
+                    status: 'cancelled',
+                  }
+                : m
+            )
+          );
+          await Promise.resolve(onNewMessage?.());
+        }
       );
-
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === tempAssistantMessageId
-            ? {
-                ...m,
-                id: result.message.id,
-                content: result.message.content,
-                status: result.message.status,
-                sequenceNumber: result.message.sequenceNumber,
-              }
-            : m
-        )
-      );
-      await Promise.resolve(onNewMessage?.());
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to send message');
-      setMessages((prev) =>
-        prev.map((m) =>
-          m.id === tempAssistantMessageId
-            ? { ...m, content: '', status: 'failed' }
-            : m
-        )
-      );
-      await Promise.resolve(onNewMessage?.());
+      if (!isCancellingRef.current) {
+        setError(err instanceof Error ? err.message : 'Failed to send message');
+        setMessages((prev) =>
+          prev.map((m) =>
+            m.id === tempAssistantMessageId
+              ? { ...m, status: 'failed' }
+              : m
+          )
+        );
+        await Promise.resolve(onNewMessage?.());
+      }
     } finally {
       setIsLoading(false);
+      isCancellingRef.current = false;
+    }
+  };
+
+  const handleCancel = async () => {
+    if (!isLoading) {
+      return;
+    }
+
+    try {
+      isCancellingRef.current = true;
+      setError(null);
+      await cancelConversation(conversationId);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to cancel request');
+      isCancellingRef.current = false;
     }
   };
 
@@ -244,12 +360,18 @@ export default function ChatInterface({
           </div>
 
           <button
-            onClick={handleSend}
-            disabled={isLoading || !input.trim()}
-            className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-sky-500 text-white transition hover:bg-sky-400 disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500"
-            aria-label="Send message"
+            onClick={isLoading ? handleCancel : handleSend}
+            disabled={!isLoading && !input.trim()}
+            className={`flex h-11 min-w-[44px] shrink-0 items-center justify-center rounded-2xl px-3 text-white transition disabled:cursor-not-allowed disabled:bg-zinc-700 disabled:text-zinc-500 ${
+              isLoading ? 'bg-red-500 hover:bg-red-400' : 'bg-sky-500 hover:bg-sky-400'
+            }`}
+            aria-label={isLoading ? 'Cancel response' : 'Send message'}
           >
-            <SendIcon className="h-4 w-4" />
+            {isLoading ? (
+              <span className="text-xs font-semibold uppercase tracking-[0.16em]">Stop</span>
+            ) : (
+              <SendIcon className="h-4 w-4" />
+            )}
           </button>
         </div>
       </div>
@@ -286,6 +408,7 @@ export default function ChatInterface({
                   key={prompt}
                   type="button"
                   onClick={() => setInput(prompt)}
+                  disabled={isLoading}
                   className="rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3 text-left text-sm text-zinc-300 transition hover:border-white/20 hover:bg-white/[0.06] hover:text-white"
                 >
                   {prompt}
@@ -322,16 +445,19 @@ export default function ChatInterface({
                         : 'border-white/10 bg-white/[0.03] text-zinc-100'
                     }`}
                   >
-                    <div
-                      className="prose prose-invert max-w-none prose-p:my-0 prose-headings:mb-4 prose-headings:mt-0 prose-ol:my-0 prose-ul:my-0 prose-pre:my-0 prose-code:before:hidden prose-code:after:hidden"
-                      dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(getMessageContent(message)) }}
-                    />
+                  <div
+                    className="prose prose-invert max-w-none prose-p:my-0 prose-headings:mb-3 prose-headings:mt-0 prose-ol:my-0 prose-ul:my-0 prose-pre:my-0 prose-code:before:hidden prose-code:after:hidden [&>*+*]:mt-4"
+                    dangerouslySetInnerHTML={{ __html: renderMarkdownToHtml(getMessageContent(message)) }}
+                  />
                     {message.status === 'partial' && (
                       <div className="mt-3 flex items-center space-x-1">
                         <div className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" />
                         <div className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '0.1s' }} />
                         <div className="h-1.5 w-1.5 rounded-full bg-zinc-400 animate-bounce" style={{ animationDelay: '0.2s' }} />
                       </div>
+                    )}
+                    {message.role === 'assistant' && message.status === 'partial' && !message.content && (
+                      <p className="mt-0 text-[15px] leading-7 text-zinc-400">Thinking…</p>
                     )}
                     {message.role === 'assistant' && message.status === 'failed' && (
                       <p className="mt-3 text-xs text-red-300">Model request failed</p>
