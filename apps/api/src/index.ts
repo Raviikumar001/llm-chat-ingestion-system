@@ -17,6 +17,7 @@ import healthRoutes from './routes/health';
 import conversationRoutes from './routes/conversations';
 import chatRoutes from './routes/chat';
 import ingestionRoutes from './routes/ingestion';
+import metricsRoutes from './routes/metrics';
 
 loadApiEnv();
 
@@ -99,6 +100,7 @@ async function start() {
   await app.register(conversationRoutes, { prefix: '/api/v1/conversations' });
   await app.register(chatRoutes, { prefix: '/api/v1/chat' });
   await app.register(ingestionRoutes, { prefix: '/api/v1/ingestion' });
+  await app.register(metricsRoutes, { prefix: '/api/v1/metrics' });
 
   const port = parseInt(process.env.API_PORT || '3001', 10);
 

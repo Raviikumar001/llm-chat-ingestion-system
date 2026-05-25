@@ -27,6 +27,17 @@ interface ActiveRequest {
 
 const activeRequests = new Map<string, ActiveRequest>();
 
+function buildStreamCorsHeaders(originHeader: string | undefined) {
+  const allowedOrigin = process.env.WEB_URL || 'http://localhost:3000';
+  const origin = originHeader && originHeader === allowedOrigin ? originHeader : allowedOrigin;
+
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Credentials': 'true',
+    'Vary': 'Origin',
+  };
+}
+
 function isCancelledError(error: unknown): boolean {
   return error instanceof Error && error.message.toLowerCase().includes('cancel');
 }
@@ -223,6 +234,8 @@ const chatRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache',
         'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+        ...buildStreamCorsHeaders(request.headers.origin),
       });
       reply.raw.flushHeaders?.();
 

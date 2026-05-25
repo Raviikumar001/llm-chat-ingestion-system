@@ -13,8 +13,8 @@ export function buildChatOptions(defaultProvider: SupportedProvider, defaultMode
       models,
     })),
     features: {
-      streamingEnabled: false,
-      cancellationEnabled: false,
+      streamingEnabled: true,
+      cancellationEnabled: true,
     },
   };
 }

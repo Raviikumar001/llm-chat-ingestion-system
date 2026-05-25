@@ -13,6 +13,36 @@ export interface ChatOptionsResponse {
   };
 }
 
+export interface MetricsOverviewResponse {
+  generatedAt: string;
+  windowHours: number;
+  totals: {
+    totalRequests: number;
+    completedRequests: number;
+    failedRequests: number;
+    cancelledRequests: number;
+    timedOutRequests: number;
+    avgLatencyMs: number | null;
+    p95LatencyMs: number | null;
+    requestsLastHour: number;
+    errorRate: number;
+  };
+  providers: Array<{
+    provider: string;
+    totalRequests: number;
+    avgLatencyMs: number | null;
+    errorRate: number;
+  }>;
+  recentErrors: Array<{
+    requestId: string;
+    provider: string;
+    model: string;
+    errorCode: string | null;
+    errorMessage: string | null;
+    createdAt: string;
+  }>;
+}
+
 function processSseBuffer(
   rawBuffer: string,
   onChunk: (chunk: { text: string; finishReason?: string }) => void,
@@ -142,6 +172,11 @@ export async function getChatOptions() {
   return handleResponse<ChatOptionsResponse>(response);
 }
 
+export async function getMetricsOverview() {
+  const response = await fetch(`${API_BASE}/api/v1/metrics/overview`);
+  return handleResponse<MetricsOverviewResponse>(response);
+}
+
 export async function sendMessageWithOptions(
   conversationId: string,
   message: string,
@@ -179,6 +214,8 @@ export async function sendMessageWithOptions(
 export async function streamMessage(
   conversationId: string,
   message: string,
+  provider: 'cerebras' | 'gemini',
+  model: string,
   onChunk: (chunk: { text: string; finishReason?: string }) => void,
   onDone: (messageId: string) => void,
   onError: (error: string) => void,
@@ -187,7 +224,7 @@ export async function streamMessage(
   const response = await fetch(`${API_BASE}/api/v1/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ conversationId, message }),
+    body: JSON.stringify({ conversationId, message, provider, model }),
   });
 
   if (!response.ok) {
