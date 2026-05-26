@@ -1,6 +1,19 @@
 import { sql } from 'drizzle-orm';
 import { db } from '../db';
 
+interface TimeSeriesPoint {
+  time: string;
+  totalRequests: number;
+  completedRequests: number;
+  failedRequests: number;
+  cancelledRequests: number;
+  timedOutRequests: number;
+  avgLatencyMs: number | null;
+  p95LatencyMs: number | null;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+}
+
 interface MetricsOverview {
   generatedAt: string;
   windowHours: number;
@@ -29,10 +42,11 @@ interface MetricsOverview {
     errorMessage: string | null;
     createdAt: string;
   }>;
+  timeSeries: TimeSeriesPoint[];
 }
 
 export async function getMetricsOverview(windowHours = 24): Promise<MetricsOverview> {
-  const [totalsResult, providersResult, recentErrorsResult] = await Promise.all([
+  const [totalsResult, providersResult, recentErrorsResult, timeSeriesResult] = await Promise.all([
     db.execute(sql`
       with scoped as (
         select *
@@ -109,11 +123,47 @@ export async function getMetricsOverview(windowHours = 24): Promise<MetricsOverv
       order by created_at desc
       limit 5
     `),
+    db.execute(sql`
+      with series as (
+        select generate_series(
+          date_trunc('hour', now() - (${windowHours} * interval '1 hour')),
+          date_trunc('hour', now()),
+          '1 hour'
+        ) as bucket
+      ),
+      scoped as (
+        select
+          date_trunc('hour', created_at) as bucket,
+          status,
+          latency_ms,
+          input_tokens,
+          output_tokens,
+          total_tokens
+        from inference_logs
+        where created_at >= now() - (${windowHours} * interval '1 hour')
+      )
+      select
+        series.bucket as time,
+        count(scoped.bucket)::int as total_requests,
+        count(scoped.bucket) filter (where scoped.status = 'completed')::int as completed_requests,
+        count(scoped.bucket) filter (where scoped.status = 'failed')::int as failed_requests,
+        count(scoped.bucket) filter (where scoped.status = 'cancelled')::int as cancelled_requests,
+        count(scoped.bucket) filter (where scoped.status = 'timed_out')::int as timed_out_requests,
+        coalesce(round(avg(scoped.latency_ms) filter (where scoped.latency_ms is not null))::int, 0) as avg_latency_ms,
+        coalesce(percentile_cont(0.95) within group (order by scoped.latency_ms) filter (where scoped.latency_ms is not null)::int, 0) as p95_latency_ms,
+        coalesce(sum(scoped.input_tokens) filter (where scoped.status = 'completed')::int, 0) as total_input_tokens,
+        coalesce(sum(scoped.output_tokens) filter (where scoped.status = 'completed')::int, 0) as total_output_tokens
+      from series
+      left join scoped on series.bucket = scoped.bucket
+      group by series.bucket
+      order by series.bucket asc
+    `),
   ]);
 
   const totalRows = Array.from(totalsResult) as Array<Record<string, unknown>>;
   const providerRows = Array.from(providersResult) as Array<Record<string, unknown>>;
   const recentErrorRows = Array.from(recentErrorsResult) as Array<Record<string, unknown>>;
+  const timeSeriesRows = Array.from(timeSeriesResult) as Array<Record<string, unknown>>;
   const totalsRow = (totalRows[0] ?? {}) as Record<string, unknown>;
 
   return {
@@ -146,6 +196,20 @@ export async function getMetricsOverview(windowHours = 24): Promise<MetricsOverv
         errorCode: record.error_code == null ? null : String(record.error_code),
         errorMessage: record.error_message == null ? null : String(record.error_message),
         createdAt: new Date(String(record.created_at)).toISOString(),
+      };
+    }),
+    timeSeries: timeSeriesRows.map((record) => {
+      return {
+        time: new Date(String(record.time)).toISOString(),
+        totalRequests: Number(record.total_requests ?? 0),
+        completedRequests: Number(record.completed_requests ?? 0),
+        failedRequests: Number(record.failed_requests ?? 0),
+        cancelledRequests: Number(record.cancelled_requests ?? 0),
+        timedOutRequests: Number(record.timed_out_requests ?? 0),
+        avgLatencyMs: record.avg_latency_ms == null ? null : Number(record.avg_latency_ms),
+        p95LatencyMs: record.p95_latency_ms == null ? null : Number(record.p95_latency_ms),
+        totalInputTokens: Number(record.total_input_tokens ?? 0),
+        totalOutputTokens: Number(record.total_output_tokens ?? 0),
       };
     }),
   };

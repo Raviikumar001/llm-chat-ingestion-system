@@ -132,3 +132,30 @@ export function ArrowLeftIcon(props: IconProps) {
     </svg>
   );
 }
+
+export function PencilIcon(props: IconProps) {
+  return (
+    <svg {...baseProps(props)}>
+      <path d="M12 20h9" />
+      <path d="m16.5 3.5 4 4" />
+      <path d="M7 16.5 18.6 4.9a1.4 1.4 0 0 1 2 0l.5.5a1.4 1.4 0 0 1 0 2L9.5 19H7z" />
+    </svg>
+  );
+}
+
+export function CheckIcon(props: IconProps) {
+  return (
+    <svg {...baseProps(props)}>
+      <path d="m5 12 4.2 4.2L19 6.5" />
+    </svg>
+  );
+}
+
+export function CloseIcon(props: IconProps) {
+  return (
+    <svg {...baseProps(props)}>
+      <path d="M6 6 18 18" />
+      <path d="M18 6 6 18" />
+    </svg>
+  );
+}

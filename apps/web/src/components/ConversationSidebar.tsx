@@ -117,7 +117,7 @@ export default function ConversationSidebar({
             <OlliveMark className="h-5 w-5" />
           </div>
           <div className={isCollapsed ? 'hidden' : 'block'}>
-            <p className="text-sm font-semibold text-zinc-100">Ollive Chat</p>
+            <p className="text-sm font-semibold text-zinc-100">SignalChat</p>
             <p className="text-xs text-zinc-500">Inference workspace</p>
           </div>
         </div>

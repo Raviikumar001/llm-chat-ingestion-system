@@ -13,6 +13,19 @@ export interface ChatOptionsResponse {
   };
 }
 
+export interface TimeSeriesPoint {
+  time: string;
+  totalRequests: number;
+  completedRequests: number;
+  failedRequests: number;
+  cancelledRequests: number;
+  timedOutRequests: number;
+  avgLatencyMs: number | null;
+  p95LatencyMs: number | null;
+  totalInputTokens: number;
+  totalOutputTokens: number;
+}
+
 export interface MetricsOverviewResponse {
   generatedAt: string;
   windowHours: number;
@@ -41,6 +54,7 @@ export interface MetricsOverviewResponse {
     errorMessage: string | null;
     createdAt: string;
   }>;
+  timeSeries: TimeSeriesPoint[];
 }
 
 function processSseBuffer(
@@ -136,6 +150,23 @@ export async function getConversation(id: string) {
       sequenceNumber: number;
       createdAt: string;
     }>;
+  }>(response);
+}
+
+export async function renameConversation(id: string, title: string) {
+  const response = await fetch(`${API_BASE}/api/v1/conversations/${id}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+
+  return handleResponse<{
+    id: string;
+    title: string | null;
+    status: string;
+    createdAt: string;
+    updatedAt: string;
+    lastMessageAt: string | null;
   }>(response);
 }
 

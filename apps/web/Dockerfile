@@ -10,7 +10,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml tsconfig.json ./
 
 # Copy package files
 COPY apps/web/package.json apps/web/tsconfig.json apps/web/next.config.js ./apps/web/
-COPY apps/web/tailwind.config.js apps/web/postcss.config.js ./apps/web/
+COPY apps/web/postcss.config.js ./apps/web/
 COPY packages/shared/package.json packages/shared/tsconfig.json ./packages/shared/
 
 # Install dependencies

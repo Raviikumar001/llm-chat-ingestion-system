@@ -53,7 +53,7 @@ export default function ObservabilityPage() {
   }, [loadMetrics]);
 
   return (
-    <div className="min-h-full bg-[#08090c] text-zinc-100">
+    <div className="flex-1 overflow-y-auto bg-[#08090c] text-zinc-100">
       <div className="border-b border-white/10 bg-black/30 backdrop-blur">
         <div className="mx-auto flex w-full max-w-7xl items-center justify-between gap-4 px-4 py-4 sm:px-6 lg:px-8">
           <div className="flex items-center gap-4">

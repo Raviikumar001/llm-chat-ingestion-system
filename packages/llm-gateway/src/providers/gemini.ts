@@ -13,26 +13,38 @@ function processGeminiStreamBuffer(
   onFinishReason: (finishReason: string) => void,
   onFirstToken: () => void
 ) {
-  const lines = rawBuffer.split(/\r?\n/);
-  const remainder = rawBuffer.endsWith('\n') ? '' : (lines.pop() || '');
+  const events = rawBuffer.split(/\r?\n\r?\n/);
+  const remainder = rawBuffer.match(/\r?\n\r?\n$/) ? '' : (events.pop() || '');
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
+  for (const event of events) {
+    const dataLines = event
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) => line.startsWith('data: '))
+      .map((line) => line.slice(6));
+
+    if (dataLines.length === 0) {
+      continue;
+    }
+
+    const payload = dataLines.join('\n').trim();
+    if (!payload || payload === '[DONE]') {
+      continue;
+    }
 
     try {
-      const parsed = JSON.parse(trimmed) as {
-        candidates: Array<{
-          content: {
-            parts: Array<{ text: string }>;
+      const parsed = JSON.parse(payload) as {
+        candidates?: Array<{
+          content?: {
+            parts?: Array<{ text?: string }>;
           };
-          finishReason: string;
+          finishReason?: string;
         }>;
       };
 
       const candidate = parsed.candidates?.[0];
       const parts = candidate?.content?.parts || [];
-      const chunkText = parts.map(p => p.text).join('');
+      const chunkText = parts.map((part) => part.text || '').join('');
       const chunkFinishReason = candidate?.finishReason;
 
       if (chunkText) {
@@ -44,7 +56,7 @@ function processGeminiStreamBuffer(
         onFinishReason(chunkFinishReason);
       }
     } catch {
-      // Skip malformed JSON
+      // Skip malformed SSE frames
     }
   }
 
@@ -273,7 +285,7 @@ export class GeminiProvider implements LlmProvider {
       }
 
       const response = await fetch(
-        `${GEMINI_API_BASE}/models/${request.model}:streamGenerateContent?key=${this.apiKey}`,
+        `${GEMINI_API_BASE}/models/${request.model}:streamGenerateContent?alt=sse&key=${this.apiKey}`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },

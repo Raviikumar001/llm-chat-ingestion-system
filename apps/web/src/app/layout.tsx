@@ -2,7 +2,7 @@ import type { Metadata } from 'next';
 import './globals.css';
 
 export const metadata: Metadata = {
-  title: 'Ollive Chat',
+  title: 'SignalChat',
   description: 'LLM Chatbot with Inference Logging',
 };
 

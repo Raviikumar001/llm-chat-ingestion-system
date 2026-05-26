@@ -2,14 +2,17 @@ import { FastifyInstance, FastifyPluginAsync } from 'fastify';
 import {
   CreateConversationRequestSchema,
   ConversationIdParamsSchema,
+  UpdateConversationTitleRequestSchema,
   type ConversationIdParams,
   type CreateConversationRequest,
+  type UpdateConversationTitleRequest,
 } from '@ollive/shared';
 import { validateHook } from '../plugins/validate';
 import {
   createConversation,
   listConversations,
   getConversationWithMessages,
+  updateConversationTitle,
 } from '../repositories/conversations';
 
 const conversationRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) => {
@@ -54,6 +57,30 @@ const conversationRoutes: FastifyPluginAsync = async (fastify: FastifyInstance) 
     async (request, reply) => {
       const { id } = request.validatedParams as ConversationIdParams;
       const conversation = await getConversationWithMessages(id);
+
+      if (!conversation) {
+        const error = new Error('Conversation not found') as Error & { statusCode: number };
+        error.statusCode = 404;
+        throw error;
+      }
+
+      return reply.send(conversation);
+    }
+  );
+
+  fastify.patch(
+    '/:id',
+    {
+      preHandler: validateHook({
+        params: ConversationIdParamsSchema,
+        body: UpdateConversationTitleRequestSchema,
+      }),
+    },
+    async (request, reply) => {
+      const { id } = request.validatedParams as ConversationIdParams;
+      const body = request.validatedBody as UpdateConversationTitleRequest;
+
+      const conversation = await updateConversationTitle(id, body.title);
 
       if (!conversation) {
         const error = new Error('Conversation not found') as Error & { statusCode: number };

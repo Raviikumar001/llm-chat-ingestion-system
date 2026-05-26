@@ -27,6 +27,10 @@ export const CreateConversationRequestSchema = z.object({
   title: z.string().max(200).optional(),
 });
 
+export const UpdateConversationTitleRequestSchema = z.object({
+  title: z.string().trim().min(1, 'Title cannot be empty').max(200, 'Title too long'),
+});
+
 export const SendChatRequestSchema = z.object({
   conversationId: UuidSchema,
   message: z.string().min(1, 'Message cannot be empty').max(8000, 'Message too long'),
@@ -70,6 +74,7 @@ export const IngestionPayloadSchema = z.object({
 });
 
 export type CreateConversationRequest = z.infer<typeof CreateConversationRequestSchema>;
+export type UpdateConversationTitleRequest = z.infer<typeof UpdateConversationTitleRequestSchema>;
 export type SendChatRequest = z.infer<typeof SendChatRequestSchema>;
 export type ConversationIdParams = z.infer<typeof ConversationIdParamsSchema>;
 export type IngestionPayload = z.infer<typeof IngestionPayloadSchema>;

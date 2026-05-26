@@ -7,11 +7,21 @@ import {
   getChatOptions,
   getConversation,
   listConversations,
+  renameConversation,
   type ChatOptionsResponse,
 } from '../lib/api';
 import ConversationSidebar from '../components/ConversationSidebar';
 import ChatInterface from '../components/ChatInterface';
-import { BarChartIcon, ChevronDownIcon, OlliveMark, SlidersIcon, SparklesIcon } from '../components/AppIcons';
+import {
+  BarChartIcon,
+  CheckIcon,
+  ChevronDownIcon,
+  CloseIcon,
+  OlliveMark,
+  PencilIcon,
+  SlidersIcon,
+  SparklesIcon,
+} from '../components/AppIcons';
 
 interface ChatMessage {
   id: string;
@@ -62,6 +72,9 @@ export default function ChatPage() {
   const [error, setError] = useState<string | null>(null);
   const [sidebarRefreshKey, setSidebarRefreshKey] = useState(0);
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [isEditingTitle, setIsEditingTitle] = useState(false);
+  const [draftTitle, setDraftTitle] = useState('');
+  const [isSavingTitle, setIsSavingTitle] = useState(false);
 
   const getConversationLabel = useCallback((nextTitle: string | null, nextMessages: ChatMessage[]) => {
     if (nextTitle?.trim()) {
@@ -76,8 +89,11 @@ export default function ChatPage() {
       const conversation = await getConversation(id);
       setConversationId(conversation.id);
       const nextMessages = conversation.messages || [];
-      setTitle(getConversationLabel(conversation.title, nextMessages));
+      const resolvedTitle = getConversationLabel(conversation.title, nextMessages);
+      setTitle(resolvedTitle);
+      setDraftTitle(conversation.title?.trim() || resolvedTitle);
       setMessages(nextMessages);
+      setIsEditingTitle(false);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to load conversation');
@@ -110,7 +126,8 @@ export default function ChatPage() {
     } catch (err) {
       setConversationId(null);
       setMessages([]);
-      setTitle('Ollive Chat');
+      setTitle('SignalChat');
+      setDraftTitle('SignalChat');
       setError(err instanceof Error ? err.message : 'Failed to initialize');
     } finally {
       setIsLoading(false);
@@ -156,6 +173,43 @@ export default function ChatPage() {
     setSelectedModel(nextModel);
   };
 
+  const handleStartEditingTitle = () => {
+    setDraftTitle(title === 'New chat' ? '' : title);
+    setIsEditingTitle(true);
+  };
+
+  const handleCancelEditingTitle = () => {
+    setDraftTitle(title);
+    setIsEditingTitle(false);
+  };
+
+  const handleSaveTitle = async () => {
+    if (!conversationId) {
+      return;
+    }
+
+    const nextTitle = draftTitle.trim();
+    if (!nextTitle) {
+      setError('Conversation title cannot be empty');
+      return;
+    }
+
+    try {
+      setIsSavingTitle(true);
+      const updatedConversation = await renameConversation(conversationId, nextTitle);
+      const resolvedTitle = updatedConversation.title || nextTitle;
+      setTitle(resolvedTitle);
+      setDraftTitle(resolvedTitle);
+      setSidebarRefreshKey((current) => current + 1);
+      setIsEditingTitle(false);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to rename conversation');
+    } finally {
+      setIsSavingTitle(false);
+    }
+  };
+
   if (isLoading && !chatOptions && !conversationId) {
     return (
       <div className="flex h-full bg-[#08090c] text-zinc-100">
@@ -199,12 +253,69 @@ export default function ChatPage() {
                 <OlliveMark className="h-5 w-5" />
               </button>
               <div>
-                <div className="flex items-center gap-2">
-                  <h1 className="text-lg font-semibold tracking-tight text-white">
-                    {conversationId ? title : 'Ollive Chat'}
-                  </h1>
-                  <ChevronDownIcon className="h-4 w-4 text-zinc-500" />
-                </div>
+                {conversationId ? (
+                  <div className="flex items-center gap-2">
+                    {isEditingTitle ? (
+                      <>
+                        <input
+                          value={draftTitle}
+                          onChange={(e) => setDraftTitle(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault();
+                              void handleSaveTitle();
+                            }
+
+                            if (e.key === 'Escape') {
+                              e.preventDefault();
+                              handleCancelEditingTitle();
+                            }
+                          }}
+                          className="min-w-[220px] rounded-xl border border-white/10 bg-white/[0.04] px-3 py-1.5 text-lg font-semibold tracking-tight text-white outline-hidden focus:border-white/20"
+                          placeholder="Conversation title"
+                          maxLength={200}
+                          disabled={isSavingTitle}
+                        />
+                        <button
+                          type="button"
+                          onClick={() => void handleSaveTitle()}
+                          disabled={isSavingTitle}
+                          className="rounded-full border border-emerald-500/20 bg-emerald-500/10 p-2 text-emerald-300 transition hover:bg-emerald-500/15 disabled:opacity-50"
+                          aria-label="Save conversation title"
+                        >
+                          <CheckIcon className="h-4 w-4" />
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleCancelEditingTitle}
+                          disabled={isSavingTitle}
+                          className="rounded-full border border-white/10 bg-white/[0.03] p-2 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white disabled:opacity-50"
+                          aria-label="Cancel renaming conversation"
+                        >
+                          <CloseIcon className="h-4 w-4" />
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <h1 className="text-lg font-semibold tracking-tight text-white">{title}</h1>
+                        <button
+                          type="button"
+                          onClick={handleStartEditingTitle}
+                          className="rounded-full border border-white/10 bg-white/[0.03] p-2 text-zinc-400 transition hover:bg-white/[0.06] hover:text-white"
+                          aria-label="Rename conversation"
+                        >
+                          <PencilIcon className="h-4 w-4" />
+                        </button>
+                        <ChevronDownIcon className="h-4 w-4 text-zinc-500" />
+                      </>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    <h1 className="text-lg font-semibold tracking-tight text-white">SignalChat</h1>
+                    <ChevronDownIcon className="h-4 w-4 text-zinc-500" />
+                  </div>
+                )}
                 {!error && (
                   <p className="mt-0.5 text-xs text-zinc-500">
                     Lightweight inference logging workspace

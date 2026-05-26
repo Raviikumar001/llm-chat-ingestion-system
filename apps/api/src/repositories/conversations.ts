@@ -117,3 +117,13 @@ export async function updateConversationStatus(id: string, status: string) {
     .set({ status, updatedAt: new Date() })
     .where(eq(conversations.id, id));
 }
+
+export async function updateConversationTitle(id: string, title: string) {
+  const result = await db
+    .update(conversations)
+    .set({ title, updatedAt: new Date() })
+    .where(eq(conversations.id, id))
+    .returning();
+
+  return result[0] || null;
+}
