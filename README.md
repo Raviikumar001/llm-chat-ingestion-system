@@ -1,39 +1,62 @@
-# Ollive
+# SignalChat
 
-Lightweight inference logging and ingestion system for an LLM chatbot. The project is built as a small monorepo with a web chat app, an API layer, an internal LLM gateway, and PostgreSQL-backed storage for conversations, messages, and inference logs.
+SignalChat is my submission for the Ollive take-home assignment. I built it as a single application that combines the four required parts of the prompt: a chat app, an internal LLM wrapper, an ingestion pipeline, and database-backed storage for both chat history and inference logs.
 
 ## What It Includes
 
-- Multi-turn chatbot UI with conversation list and resume support
+- Multi-turn chatbot UI with streaming responses
+- Conversation list, resume, and rename support
 - Provider/model switching in the UI
 - Internal LLM gateway that captures provider, model, latency, token usage, timestamps, previews, status, and errors
 - Ingestion pipeline that validates and persists normalized inference events
 - PostgreSQL schema for conversations, chat messages, and inference logs
+- Dedicated observability page for latency, throughput, error rate, and token metrics
 
+## Architecture Overview
 
+```mermaid
+flowchart LR
+  U["User"]
+  W["Next.js Web App<br/>Chat UI + Conversation List + Observability"]
+  A["Fastify API<br/>Chat + Conversations + Ingestion + Metrics"]
+  G["LLM Gateway / Wrapper<br/>Provider adapters + metadata capture"]
+  P["LLM Providers<br/>Cerebras + Gemini"]
+  I["Ingestion Pipeline<br/>Validate + normalize + persist"]
+  D["PostgreSQL<br/>conversations + messages + inference_logs"]
 
-## Architecture
-live: https://excalidraw.com/#json=_xEEbchOmTbrIHPwRXEvq,QRzegfyf2qIlEcYmmRaOGg
-![architecture](image.png)
-
-```text
-Browser
-  -> Next.js web app
-  -> Fastify API
-      -> LLM gateway
-          -> Cerebras or Gemini
-      -> ingestion service
-          -> PostgreSQL
+  U --> W
+  W --> A
+  A --> G
+  G --> P
+  G --> I
+  A --> D
+  I --> D
 ```
 
-### Components
+I kept the project as one application, but split the responsibilities cleanly so each requirement is still easy to point to.
+
+### How The Four Required Parts Fit Here
+
+1. `Chatbot Application`
+The `Next.js` app is the user-facing chat product. It supports multi-turn conversations, provider/model switching, conversation list/resume, rename, streaming responses, and an observability page.
+
+2. `Lightweight SDK / Wrapper`
+The internal `llm-gateway` package sits between the API and the model providers. Every LLM call goes through it. It normalizes provider behavior, captures inference metadata, and emits lifecycle events.
+
+3. `Ingestion Pipeline`
+The `Fastify` API exposes a dedicated ingestion endpoint. It receives normalized inference events from the gateway, validates them, merges lifecycle updates, and persists them.
+
+4. `Database Storage`
+`PostgreSQL` stores conversations, chat messages, and inference logs in separate but linked tables.
+
+### Project Layout
 
 - `apps/web`
-  Chat UI, conversation sidebar, provider/model selector, request states, and resume flow.
+  Chat UI, conversation sidebar, rename flow, provider/model selector, streaming request states, and `/observability`.
 - `apps/api`
-  Fastify server for conversations, chat, health checks, and ingestion.
+  Fastify server for conversations, chat, cancellation, ingestion, metrics, and health checks.
 - `packages/llm-gateway`
-  Thin provider adapters plus normalized inference instrumentation.
+  Provider adapters plus normalized inference instrumentation and ingestion transport.
 - `packages/shared`
   Shared Zod schemas, types, and provider/model catalog.
 - `PostgreSQL`
@@ -45,7 +68,7 @@ Browser
 |-------|------------|
 | Language | TypeScript |
 | Monorepo | pnpm workspaces |
-| Frontend | Next.js 14, React 18, Tailwind CSS |
+| Frontend | Next.js 16, React 19, Tailwind CSS 4 |
 | Backend | Fastify 4 |
 | Database | PostgreSQL 16 |
 | ORM | Drizzle ORM |
@@ -67,20 +90,20 @@ Browser
 - `gemini-3.1-flash-lite`
 - `gemini-3-flash-preview`
 
-The server default comes from `DEFAULT_PROVIDER` and `DEFAULT_MODEL`, and the UI can override them per request.
+The backend uses `DEFAULT_PROVIDER` and `DEFAULT_MODEL` as its defaults, but the UI can switch provider/model per request.
 
-## Environment Setup
+## Setup Instructions
 
-Create either `.env.local` or `.env` in the repo root. `.env.local` is recommended for local development.
+Create either `.env.local` or `.env` in the repo root. I used `.env.local` for local development.
 
 ```bash
 cp .env.example .env.local
 ```
 
-Required values:
+Minimum required values:
 
 ```bash
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/ollive
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/signalchat
 
 CEREBRAS_API_KEY=your_cerebras_key
 GEMINI_API_KEY=your_gemini_key
@@ -94,10 +117,10 @@ DEFAULT_MODEL=gpt-oss-120b
 ```bash
 pnpm install
 
-docker run -d --name ollive-postgres \
+docker run -d --name signalchat-postgres \
   -e POSTGRES_USER=postgres \
   -e POSTGRES_PASSWORD=postgres \
-  -e POSTGRES_DB=ollive \
+  -e POSTGRES_DB=signalchat \
   -p 5432:5432 postgres:16-alpine
 
 pnpm db:migrate
@@ -107,11 +130,20 @@ pnpm dev
 Open:
 
 - Web: `http://localhost:3000`
+- Observability: `http://localhost:3000/observability`
 - API health: `http://localhost:3001/health`
 
 ## One-Command Docker Compose
 
-The compose stack reads repo-root `.env.local` or `.env` if present.
+There is also a one-command Docker Compose setup. It reads the repo-root `.env.local` or `.env` file if present.
+
+From the repo root:
+
+```bash
+docker compose -f infrastructure/docker/docker-compose.yml up --build
+```
+
+Or from the docker directory:
 
 ```bash
 cd infrastructure/docker
@@ -121,6 +153,7 @@ docker compose up --build
 Open:
 
 - Web: `http://localhost:3000`
+- Observability: `http://localhost:3000/observability`
 - API: `http://localhost:3001`
 
 ## Main API Endpoints
@@ -132,18 +165,20 @@ Open:
 | `/api/v1/conversations` | POST | Create a conversation |
 | `/api/v1/conversations` | GET | List conversations |
 | `/api/v1/conversations/:id` | GET | Fetch a conversation and its messages |
+| `/api/v1/conversations/:id` | PATCH | Rename a conversation |
 | `/api/v1/chat/options` | GET | Available providers, models, and defaults |
-| `/api/v1/chat` | POST | Send a chat message using stable request/response flow |
-| `/api/v1/chat/stream` | POST | Experimental SSE streaming endpoint |
+| `/api/v1/chat` | POST | Non-streaming chat endpoint |
+| `/api/v1/chat/stream` | POST | Primary SSE streaming chat endpoint |
 | `/api/v1/chat/:id/cancel` | POST | Cancel active streaming inference |
 | `/api/v1/ingestion/inference-logs` | POST | Ingest normalized inference events |
+| `/api/v1/metrics/overview` | GET | Aggregate latency, throughput, error, and token metrics |
 
 ## Schema Design Decisions
 
 ### `conversations`
 
 - One row per chat thread
-- Stores status, timestamps, and last-message activity markers
+- Stores title, status, timestamps, and last-message activity markers
 - Indexed for recent-first listing and status filtering
 
 ### `messages`
@@ -152,6 +187,7 @@ Open:
 - Stores full content plus `content_preview` for list views
 - Uses `(conversation_id, sequence_number)` uniqueness to keep order stable
 - Constrained roles: `system`, `user`, `assistant`
+- Tracks message status so cancelled or failed assistant generations are visible
 
 ### `inference_logs`
 
@@ -161,13 +197,16 @@ Open:
 - Uses `event_id` dedupe for direct duplicate submissions
 - Links to both the user message and assistant message where available
 
+The main idea behind the schema was to keep chat history and inference telemetry separate, but still link them closely enough that I can trace a single user prompt all the way through provider execution and ingestion.
+
 ## Logging And Ingestion Flow
 
 1. The API persists the user message.
-2. The chat route builds a short context window from recent messages.
-3. The LLM gateway calls the selected provider and emits normalized inference lifecycle events.
-4. The ingestion service validates the payload and stores or updates the corresponding `inference_logs` row.
-5. The API persists the assistant message and links it back to the inference log row.
+2. The chat route builds a short context window from recent messages in the same conversation.
+3. The LLM gateway calls the selected provider and captures normalized inference metadata.
+4. The gateway sends lifecycle events to `/api/v1/ingestion/inference-logs` in near real time.
+5. The ingestion service validates, normalizes, merges, and persists the corresponding `inference_logs` row.
+6. The API streams or persists the assistant response and links the final assistant message back to the inference log row.
 
 ## Failure Handling Assumptions
 
@@ -175,30 +214,33 @@ Open:
 - Ingestion failures should not crash the chat request path.
 - Lifecycle updates are merged by `request_id`, and terminal rows are protected from stale `started` retries regressing the stored state.
 - Database availability is required for normal chat because messages are persisted as part of the main request flow.
+- Streaming cancellation is best-effort and is coordinated per active in-flight request.
 
 ## Scaling Considerations
 
-- The current ingestion path is in-process for simplicity.
-- A production version would move ingestion to an async queue or event bus.
-- Conversation reads can be optimized further with denormalized metadata or query-side joins instead of per-conversation lookups.
-- Multi-node deployments would benefit from centralized cancellation/state coordination instead of in-memory request tracking.
+I kept the current version intentionally simple, but if I were pushing this further I would change a few things:
 
-## Tradeoffs
+- The ingestion path currently posts to a synchronous HTTP endpoint. For a higher-volume system I would move this to a durable queue or event bus.
+- Conversation reads can be optimized further with denormalized metadata or fewer per-conversation lookups.
+- Multi-node deployments would need centralized cancellation/state coordination instead of in-memory request tracking.
+- Metrics aggregation could move to rollup tables or a dedicated analytics store once request volume grows.
 
-1. The primary UI path uses non-streaming chat because it is the most reliable path for the take-home core requirements.
-2. Streaming is still present as a bonus endpoint, but it is not the main UX path.
-3. Ingestion is synchronous and in-process rather than queue-backed.
-4. There is no authentication because this is a single-user demo submission.
-5. PII redaction and dashboards are intentionally left for later phases or bonus scope.
+## Tradeoffs Made
+
+1. I kept the project single-user and unauthenticated so I could spend time on inference logging and ingestion instead of account management.
+2. I used direct HTTP ingestion plus PostgreSQL persistence instead of adding a queue, mainly to keep the flow easy to inspect during a demo.
+3. The observability page reads from the primary database tables rather than a separate time-series system. That is simpler, but it would not be my long-term choice for a larger deployment.
+4. Cancellation is coordinated in-process, which works for a single-node demo but would need redesign in a distributed setup.
+5. I limited provider support to Cerebras and Gemini so the wrapper stays small while still proving the multi-provider design.
 
 ## What I Would Improve With More Time
 
-1. Add a proper metrics dashboard for latency, throughput, and error rates.
-2. Move ingestion to a durable async pipeline.
-3. Add stronger integration tests around the DB-backed chat and ingestion paths.
-4. Harden streaming and make it a first-class UI mode again.
-5. Add conversation search, auth, and multi-user support.
-6. Add PII redaction before log persistence.
+1. Move ingestion onto a durable async queue or event bus.
+2. Add stronger integration tests around end-to-end streaming, cancellation, and log persistence.
+3. Add authentication, multi-user support, and per-user conversation isolation.
+4. Add PII redaction and retention controls before log persistence.
+5. Improve observability with time-bucketed charts, filtering, and drill-down views per provider or conversation.
+6. Add search across conversations and richer analytics over token/cost trends.
 
 ## Testing
 
@@ -211,16 +253,18 @@ pnpm build
 Useful focused commands:
 
 ```bash
-pnpm --filter @ollive/api test
-pnpm --filter @ollive/api lint
-pnpm --filter @ollive/web lint
+pnpm --filter ./apps/api test
+pnpm --filter ./apps/api lint
+pnpm --filter ./apps/web lint
+pnpm --filter ./packages/llm-gateway lint
 ```
 
 ## Demo Checklist
 
 1. Start the app.
 2. Create a new conversation.
-3. Send multiple turns in the same thread.
+3. Send multiple turns in the same thread to show short-context multi-turn behavior.
 4. Switch between `cerebras` and `gemini` in the header.
-5. Resume an older conversation from the sidebar.
-6. Inspect stored inference logs in PostgreSQL to confirm metadata persistence.
+5. Resume and rename an older conversation from the sidebar/header.
+6. Open `/observability` to show latency, throughput, errors, and token metrics.
+7. Inspect stored inference logs in PostgreSQL to confirm metadata persistence.
