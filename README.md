@@ -14,6 +14,8 @@ SignalChat is my submission for the Ollive take-home assignment. I built it as a
 
 ## Architecture Overview
 
+![alt text](image-1.png)
+
 ```mermaid
 flowchart LR
   U["User"]
