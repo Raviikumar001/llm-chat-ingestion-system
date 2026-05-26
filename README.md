@@ -10,7 +10,11 @@ Lightweight inference logging and ingestion system for an LLM chatbot. The proje
 - Ingestion pipeline that validates and persists normalized inference events
 - PostgreSQL schema for conversations, chat messages, and inference logs
 
+
+
 ## Architecture
+live: https://excalidraw.com/#json=_xEEbchOmTbrIHPwRXEvq,QRzegfyf2qIlEcYmmRaOGg
+![architecture](image.png)
 
 ```text
 Browser

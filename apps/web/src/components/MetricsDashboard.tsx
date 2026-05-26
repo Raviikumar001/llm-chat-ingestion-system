@@ -543,7 +543,7 @@ export default function MetricsDashboard({
   // Precompute trend datasets for the 4 stat cards
   const trendData = useMemo(() => {
     if (!metrics || !metrics.timeSeries || metrics.timeSeries.length === 0) {
-      return { latency: [], throughput: [], errors: [], requests: [] };
+      return { latency: [], throughput: [], errors: [], requests: [], inputTokens: [], outputTokens: [] };
     }
     const series = metrics.timeSeries;
     return {
@@ -551,14 +551,16 @@ export default function MetricsDashboard({
       throughput: series.map(s => s.completedRequests),
       errors: series.map(s => s.failedRequests + s.timedOutRequests),
       requests: series.map(s => s.totalRequests),
+      inputTokens: series.map(s => s.totalInputTokens),
+      outputTokens: series.map(s => s.totalOutputTokens),
     };
   }, [metrics]);
 
   if (!metrics) {
     return (
       <div className="space-y-6">
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, index) => (
+        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
+          {Array.from({ length: 6 }).map((_, index) => (
             <div
               key={index}
               className="h-36 animate-pulse rounded-[28px] border border-white/10 bg-white/[0.03]"
@@ -589,7 +591,7 @@ export default function MetricsDashboard({
   return (
     <div className="space-y-6">
       {/* Stat Cards Section */}
-      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-6">
         <StatCard
           label="Latency"
           value={formatMetric(metrics.totals.avgLatencyMs, ' ms')}
@@ -629,6 +631,26 @@ export default function MetricsDashboard({
           sparklineColorClass="stroke-violet-400"
           sparklineFillColor="rgb(139, 92, 246)"
           sparklineId="sparkRequests"
+        />
+        <StatCard
+          label="Input Tokens"
+          value={metrics.totals.totalInputTokens.toLocaleString()}
+          subvalue={`${metrics.totals.totalTokens.toLocaleString()} total tokens`}
+          accentClass="bg-linear-to-r from-sky-500 to-blue-400"
+          trendData={trendData.inputTokens}
+          sparklineColorClass="stroke-sky-400"
+          sparklineFillColor="rgb(56, 189, 248)"
+          sparklineId="sparkInputTokens"
+        />
+        <StatCard
+          label="Output Tokens"
+          value={metrics.totals.totalOutputTokens.toLocaleString()}
+          subvalue={`${metrics.totals.totalTokens.toLocaleString()} total tokens`}
+          accentClass="bg-linear-to-r from-emerald-500 to-teal-400"
+          trendData={trendData.outputTokens}
+          sparklineColorClass="stroke-emerald-400"
+          sparklineFillColor="rgb(52, 211, 153)"
+          sparklineId="sparkOutputTokens"
         />
       </div>
 
@@ -801,6 +823,16 @@ export default function MetricsDashboard({
                 </div>
 
                 <div className="space-y-3">
+                  <div className="grid grid-cols-2 gap-2 rounded-2xl border border-white/5 bg-white/[0.02] p-3 text-xs">
+                    <div>
+                      <p className="font-mono uppercase tracking-wider text-zinc-500">Input</p>
+                      <p className="mt-1 font-semibold text-sky-300">{p.totalInputTokens.toLocaleString()}</p>
+                    </div>
+                    <div>
+                      <p className="font-mono uppercase tracking-wider text-zinc-500">Output</p>
+                      <p className="mt-1 font-semibold text-emerald-300">{p.totalOutputTokens.toLocaleString()}</p>
+                    </div>
+                  </div>
                   {/* Share progress */}
                   <div className="space-y-1">
                     <div className="flex items-center justify-between text-xs text-zinc-400">

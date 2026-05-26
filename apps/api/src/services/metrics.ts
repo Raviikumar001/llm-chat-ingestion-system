@@ -27,12 +27,18 @@ interface MetricsOverview {
     p95LatencyMs: number | null;
     requestsLastHour: number;
     errorRate: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalTokens: number;
   };
   providers: Array<{
     provider: string;
     totalRequests: number;
     avgLatencyMs: number | null;
     errorRate: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalTokens: number;
   }>;
   recentErrors: Array<{
     requestId: string;
@@ -67,6 +73,8 @@ export async function getMetricsOverview(windowHours = 24): Promise<MetricsOverv
         round(avg(latency_ms) filter (where latency_ms is not null))::int as avg_latency_ms,
         percentile_cont(0.95) within group (order by latency_ms)
           filter (where latency_ms is not null) as p95_latency_ms,
+        coalesce(sum(input_tokens) filter (where status = 'completed')::int, 0) as total_input_tokens,
+        coalesce(sum(output_tokens) filter (where status = 'completed')::int, 0) as total_output_tokens,
         (
           select count(*)::int
           from inference_logs
@@ -95,6 +103,8 @@ export async function getMetricsOverview(windowHours = 24): Promise<MetricsOverv
         provider,
         count(*)::int as total_requests,
         round(avg(latency_ms) filter (where latency_ms is not null))::int as avg_latency_ms,
+        coalesce(sum(input_tokens) filter (where status = 'completed')::int, 0) as total_input_tokens,
+        coalesce(sum(output_tokens) filter (where status = 'completed')::int, 0) as total_output_tokens,
         coalesce(
           round(
             (
@@ -179,6 +189,10 @@ export async function getMetricsOverview(windowHours = 24): Promise<MetricsOverv
       p95LatencyMs: totalsRow.p95_latency_ms == null ? null : Number(totalsRow.p95_latency_ms),
       requestsLastHour: Number(totalsRow.requests_last_hour ?? 0),
       errorRate: Number(totalsRow.error_rate ?? 0),
+      totalInputTokens: Number(totalsRow.total_input_tokens ?? 0),
+      totalOutputTokens: Number(totalsRow.total_output_tokens ?? 0),
+      totalTokens:
+        Number(totalsRow.total_input_tokens ?? 0) + Number(totalsRow.total_output_tokens ?? 0),
     },
     providers: providerRows.map((record) => {
       return {
@@ -186,6 +200,10 @@ export async function getMetricsOverview(windowHours = 24): Promise<MetricsOverv
         totalRequests: Number(record.total_requests ?? 0),
         avgLatencyMs: record.avg_latency_ms == null ? null : Number(record.avg_latency_ms),
         errorRate: Number(record.error_rate ?? 0),
+        totalInputTokens: Number(record.total_input_tokens ?? 0),
+        totalOutputTokens: Number(record.total_output_tokens ?? 0),
+        totalTokens:
+          Number(record.total_input_tokens ?? 0) + Number(record.total_output_tokens ?? 0),
       };
     }),
     recentErrors: recentErrorRows.map((record) => {

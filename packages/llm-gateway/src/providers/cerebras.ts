@@ -11,7 +11,8 @@ function processCerebrasStreamBuffer(
   rawBuffer: string,
   onChunk: (text: string, finishReason?: string) => void,
   onFinishReason: (finishReason: string) => void,
-  onFirstToken: () => void
+  onFirstToken: () => void,
+  onUsage?: (usage: { inputTokens: number; outputTokens: number; totalTokens: number }) => void
 ) {
   const lines = rawBuffer.split(/\r?\n/);
   const remainder = rawBuffer.endsWith('\n') ? '' : (lines.pop() || '');
@@ -25,11 +26,24 @@ function processCerebrasStreamBuffer(
 
     try {
       const parsed = JSON.parse(data) as {
-        choices: Array<{
+        choices?: Array<{
           delta: { content?: string };
           finish_reason: string | null;
         }>;
+        usage?: {
+          prompt_tokens: number;
+          completion_tokens: number;
+          total_tokens: number;
+        };
       };
+
+      if (parsed.usage && onUsage) {
+        onUsage({
+          inputTokens: parsed.usage.prompt_tokens,
+          outputTokens: parsed.usage.completion_tokens,
+          totalTokens: parsed.usage.total_tokens,
+        });
+      }
 
       const choice = parsed.choices?.[0];
       const delta = choice?.delta?.content || '';
@@ -237,6 +251,7 @@ export class CerebrasProvider implements LlmProvider {
     let firstTokenTime: number | null = null;
     let fullText = '';
     let finishReason: string | undefined;
+    let usage: IngestionPayload['usage'] = null;
 
     // Emit started event
     const startedAt = getTimestamp();
@@ -266,6 +281,7 @@ export class CerebrasProvider implements LlmProvider {
           model: request.model,
           messages: request.messages,
           stream: true,
+          stream_options: { include_usage: true },
         }),
       });
 
@@ -328,6 +344,9 @@ export class CerebrasProvider implements LlmProvider {
             if (firstTokenTime === null) {
               firstTokenTime = Date.now() - new Date(startedAt).getTime();
             }
+          },
+          (usageData) => {
+            usage = usageData;
           }
         );
 
@@ -356,6 +375,9 @@ export class CerebrasProvider implements LlmProvider {
             if (firstTokenTime === null) {
               firstTokenTime = Date.now() - new Date(startedAt).getTime();
             }
+          },
+          (usageData) => {
+            usage = usageData;
           }
         );
 
@@ -380,6 +402,7 @@ export class CerebrasProvider implements LlmProvider {
         timeToFirstTokenMs: firstTokenTime,
         requestPreview,
         responsePreview: buildResponsePreview(fullText),
+        usage,
         metadata: {
           finishReason,
         },

@@ -11,7 +11,8 @@ function processGeminiStreamBuffer(
   rawBuffer: string,
   onChunk: (text: string, finishReason?: string) => void,
   onFinishReason: (finishReason: string) => void,
-  onFirstToken: () => void
+  onFirstToken: () => void,
+  onUsage?: (usage: { inputTokens: number; outputTokens: number; totalTokens: number }) => void
 ) {
   const events = rawBuffer.split(/\r?\n\r?\n/);
   const remainder = rawBuffer.match(/\r?\n\r?\n$/) ? '' : (events.pop() || '');
@@ -40,7 +41,20 @@ function processGeminiStreamBuffer(
           };
           finishReason?: string;
         }>;
+        usageMetadata?: {
+          promptTokenCount: number;
+          candidatesTokenCount: number;
+          totalTokenCount: number;
+        };
       };
+
+      if (parsed.usageMetadata && onUsage) {
+        onUsage({
+          inputTokens: parsed.usageMetadata.promptTokenCount,
+          outputTokens: parsed.usageMetadata.candidatesTokenCount,
+          totalTokens: parsed.usageMetadata.totalTokenCount,
+        });
+      }
 
       const candidate = parsed.candidates?.[0];
       const parts = candidate?.content?.parts || [];
@@ -260,6 +274,7 @@ export class GeminiProvider implements LlmProvider {
     let firstTokenTime: number | null = null;
     let fullText = '';
     let finishReason: string | undefined;
+    let usage: IngestionPayload['usage'] = null;
 
     const startedAt = getTimestamp();
     const startedPayload: IngestionPayload = {
@@ -353,6 +368,9 @@ export class GeminiProvider implements LlmProvider {
             if (firstTokenTime === null) {
               firstTokenTime = Date.now() - new Date(startedAt).getTime();
             }
+          },
+          (usageData) => {
+            usage = usageData;
           }
         );
 
@@ -381,6 +399,9 @@ export class GeminiProvider implements LlmProvider {
             if (firstTokenTime === null) {
               firstTokenTime = Date.now() - new Date(startedAt).getTime();
             }
+          },
+          (usageData) => {
+            usage = usageData;
           }
         );
 
@@ -404,6 +425,7 @@ export class GeminiProvider implements LlmProvider {
         timeToFirstTokenMs: firstTokenTime,
         requestPreview,
         responsePreview: buildResponsePreview(fullText),
+        usage,
         metadata: {
           finishReason,
         },

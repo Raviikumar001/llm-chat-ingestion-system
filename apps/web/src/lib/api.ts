@@ -39,12 +39,18 @@ export interface MetricsOverviewResponse {
     p95LatencyMs: number | null;
     requestsLastHour: number;
     errorRate: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalTokens: number;
   };
   providers: Array<{
     provider: string;
     totalRequests: number;
     avgLatencyMs: number | null;
     errorRate: number;
+    totalInputTokens: number;
+    totalOutputTokens: number;
+    totalTokens: number;
   }>;
   recentErrors: Array<{
     requestId: string;
